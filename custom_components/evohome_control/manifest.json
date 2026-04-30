@@ -1,0 +1,11 @@
+{
+  "domain": "evohome_control",
+  "name": "Evohome Control",
+  "codeowners": ["@colegates"],
+  "config_flow": true,
+  "documentation": "https://github.com/colegates/evohome-control",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/colegates/evohome-control/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}
