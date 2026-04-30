@@ -22,9 +22,16 @@ It uses the same Resideo TCC v2 web API as the official integration.
 
 ## Status
 
-Early development - schedule read/write and multi-location enumeration are
-working against the live API. More features (DHW control, presets,
-schedule templates, automation helpers) will follow.
+Working against the live API:
+
+  * multi-location enumeration (one climate entity per zone, across every
+    location on the account)
+  * weekly heating schedule read/write per zone
+  * domestic hot water control (`water_heater` entity, schedule round-trip)
+  * per-location system-mode selector (Auto / AutoWithEco / Away / DayOff /
+    HeatingOff / ...)
+  * temporary or permanent zone overrides via service call
+  * copy a schedule from one zone onto another
 
 ## Installation (HACS)
 
@@ -41,6 +48,10 @@ schedule templates, automation helpers) will follow.
 |---|---|
 | `evohome_control.get_schedule` | Returns the current weekly schedule for a zone (response service). |
 | `evohome_control.set_schedule` | Replaces the weekly schedule for a zone. |
+| `evohome_control.copy_zone_schedule` | Copies the schedule from one zone onto another. |
+| `evohome_control.set_zone_temperature_until` | Override a zone's setpoint (permanent, or for a duration / until a time). |
+| `evohome_control.clear_zone_override` | Return a zone to FollowSchedule. |
+| `evohome_control.set_system_mode` | Change the system mode of a location (optionally until a time). |
 | `evohome_control.refresh_schedules` | Force-poll every location. |
 
 ### Example: set a weekday-vs-weekend schedule

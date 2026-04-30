@@ -294,6 +294,43 @@ class EvohomeApiClient:
             "PUT", f"temperatureControlSystem/{tcs_id}/mode", json=body
         )
 
+    # ---- domestic hot water --------------------------------------------
+
+    async def async_get_dhw_schedule(self, dhw_id: str) -> dict[str, Any]:
+        return await self._request("GET", f"domesticHotWater/{dhw_id}/schedule")
+
+    async def async_set_dhw_schedule(
+        self, dhw_id: str, schedule: dict[str, Any] | list[Any]
+    ) -> None:
+        body = (
+            {"dailySchedules": schedule}
+            if isinstance(schedule, list)
+            else schedule
+        )
+        await self._request(
+            "PUT", f"domesticHotWater/{dhw_id}/schedule", json=body
+        )
+
+    async def async_set_dhw_state(
+        self,
+        dhw_id: str,
+        *,
+        mode: str,
+        state: str | None = None,
+        time_until: str | None = None,
+    ) -> None:
+        """Set DHW mode/state.
+
+        ``mode`` is one of FollowSchedule / PermanentOverride / TemporaryOverride.
+        ``state`` (On/Off) is required for the override modes.
+        """
+        body: dict[str, Any] = {"mode": mode}
+        if state is not None:
+            body["state"] = state
+        if time_until is not None:
+            body["untilTime"] = time_until
+        await self._request("PUT", f"domesticHotWater/{dhw_id}/state", json=body)
+
 
 async def _safe_json(resp: aiohttp.ClientResponse) -> Any:
     try:

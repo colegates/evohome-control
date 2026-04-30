@@ -63,3 +63,132 @@ set_schedule:
 refresh_schedules:
   name: Refresh all data
   description: Force a poll of every configured Evohome location.
+
+copy_zone_schedule:
+  name: Copy schedule between zones
+  description: >-
+    Copy the weekly heating schedule from one zone onto another. Both zones
+    must be on the same Evohome account; pass location_id to disambiguate
+    when the same zone_id appears in more than one location.
+  fields:
+    from_zone_id:
+      name: Source zone ID
+      required: true
+      example: "1909976"
+      selector:
+        text:
+    to_zone_id:
+      name: Target zone ID
+      required: true
+      example: "1909977"
+      selector:
+        text:
+    location_id:
+      name: Location ID
+      required: false
+      example: "1706229"
+      selector:
+        text:
+
+set_zone_temperature_until:
+  name: Override zone temperature
+  description: >-
+    Apply a heat setpoint override to a zone. With no duration/until this is a
+    permanent override; supplying duration or until creates a temporary override
+    that the system reverts to schedule afterwards.
+  fields:
+    zone_id:
+      name: Zone ID
+      required: true
+      example: "1909976"
+      selector:
+        text:
+    temperature:
+      name: Setpoint
+      required: true
+      example: 21.0
+      selector:
+        number:
+          min: 5
+          max: 35
+          step: 0.5
+          unit_of_measurement: "°C"
+    duration:
+      name: Duration
+      description: How long the override should last (mutually exclusive with `until`).
+      required: false
+      example: "01:30:00"
+      selector:
+        duration:
+    until:
+      name: Until
+      description: Absolute time the override should end (mutually exclusive with `duration`).
+      required: false
+      example: "2026-01-01 22:00:00"
+      selector:
+        datetime:
+    location_id:
+      name: Location ID
+      required: false
+      example: "1706229"
+      selector:
+        text:
+
+clear_zone_override:
+  name: Clear zone override
+  description: Return a zone to FollowSchedule (cancels any active override).
+  fields:
+    zone_id:
+      name: Zone ID
+      required: true
+      example: "1909976"
+      selector:
+        text:
+    location_id:
+      name: Location ID
+      required: false
+      example: "1706229"
+      selector:
+        text:
+
+set_system_mode:
+  name: Set system mode
+  description: >-
+    Change the operating mode of a location's TCS (Auto / AutoWithEco /
+    AutoWithReset / Away / DayOff / HeatingOff / Custom). Passing `until` makes
+    it temporary.
+  fields:
+    location_id:
+      name: Location ID
+      required: true
+      example: "1706229"
+      selector:
+        text:
+    system_mode:
+      name: Mode
+      required: true
+      example: Away
+      selector:
+        select:
+          options:
+            - Auto
+            - AutoWithEco
+            - AutoWithReset
+            - Away
+            - DayOff
+            - HeatingOff
+            - Custom
+    permanent:
+      name: Permanent
+      description: Apply the mode permanently (default true). Ignored when `until` is given.
+      required: false
+      default: true
+      selector:
+        boolean:
+    until:
+      name: Until
+      description: Absolute time at which the system should revert.
+      required: false
+      example: "2026-01-08 09:00:00"
+      selector:
+        datetime:

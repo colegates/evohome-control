@@ -44,6 +44,20 @@ class ZoneData:
 
 
 @dataclass
+class DhwData:
+    """Domestic hot water state for one TCS (None when the system has no DHW)."""
+
+    location_id: str
+    tcs_id: str
+    dhw_id: str
+    temperature: float | None
+    is_available: bool
+    state: str | None  # "On" | "Off"
+    mode: str | None  # FollowSchedule | PermanentOverride | TemporaryOverride
+    schedule: dict[str, Any] | None = None
+
+
+@dataclass
 class LocationData:
     """All data for one Resideo location."""
 
@@ -53,8 +67,12 @@ class LocationData:
     country: str | None
     time_zone: str | None
     tcs_ids: list[str] = field(default_factory=list)
+    primary_tcs_id: str | None = None
     system_mode: str | None = None
+    is_system_mode_permanent: bool = True
+    allowed_system_modes: list[str] = field(default_factory=list)
     zones: dict[str, ZoneData] = field(default_factory=dict)
+    dhw: DhwData | None = None
 
 
 @dataclass
@@ -109,6 +127,23 @@ class EvohomeDataUpdateCoordinator(DataUpdateCoordinator[EvohomeData]):
                     for tcs in gw.get("temperatureControlSystems", []):
                         tcs_id = str(tcs["systemId"])
                         loc.tcs_ids.append(tcs_id)
+                        if loc.primary_tcs_id is None:
+                            loc.primary_tcs_id = tcs_id
+                            loc.allowed_system_modes = [
+                                m["systemMode"]
+                                for m in tcs.get("allowedSystemModes", [])
+                                if isinstance(m, dict) and "systemMode" in m
+                            ]
+                        if "dhw" in tcs and tcs["dhw"]:
+                            loc.dhw = DhwData(
+                                location_id=loc.location_id,
+                                tcs_id=tcs_id,
+                                dhw_id=str(tcs["dhw"]["dhwId"]),
+                                temperature=None,
+                                is_available=False,
+                                state=None,
+                                mode=None,
+                            )
                         for z in tcs.get("zones", []):
                             caps = z.get("setpointCapabilities", {}) or {}
                             zone = ZoneData(
@@ -159,9 +194,24 @@ class EvohomeDataUpdateCoordinator(DataUpdateCoordinator[EvohomeData]):
                 continue
             for gw in status.get("gateways", []):
                 for tcs in gw.get("temperatureControlSystems", []):
-                    mode = (tcs.get("systemModeStatus") or {}).get("mode")
-                    if mode is not None:
-                        loc.system_mode = mode
+                    sms = tcs.get("systemModeStatus") or {}
+                    if "mode" in sms:
+                        loc.system_mode = sms["mode"]
+                        loc.is_system_mode_permanent = bool(
+                            sms.get("isPermanent", True)
+                        )
+                    if loc.dhw is not None:
+                        dhw_st = tcs.get("dhw") or {}
+                        if str(dhw_st.get("dhwId")) == loc.dhw.dhw_id:
+                            t = (dhw_st.get("temperatureStatus") or {})
+                            s = (dhw_st.get("stateStatus") or {})
+                            temp = t.get("temperature")
+                            loc.dhw.temperature = (
+                                float(temp) if temp is not None else None
+                            )
+                            loc.dhw.is_available = bool(t.get("isAvailable", False))
+                            loc.dhw.state = s.get("state")
+                            loc.dhw.mode = s.get("mode")
                     for z in tcs.get("zones", []):
                         zone = loc.zones.get(str(z["zoneId"]))
                         if not zone:
@@ -183,16 +233,33 @@ class EvohomeDataUpdateCoordinator(DataUpdateCoordinator[EvohomeData]):
                         zone.is_available = is_avail
 
     async def _update_schedules(self, data: EvohomeData) -> None:
-        """Pull schedules for every zone concurrently."""
+        """Pull schedules for every zone (and DHW) concurrently."""
         zones = data.iter_zones()
-        results = await asyncio.gather(
+        dhw_units = [
+            loc.dhw for loc in data.locations.values() if loc.dhw is not None
+        ]
+
+        zone_results = await asyncio.gather(
             *(self.client.async_get_zone_schedule(z.zone_id) for z in zones),
             return_exceptions=True,
         )
-        for zone, sched in zip(zones, results):
+        for zone, sched in zip(zones, zone_results):
             if isinstance(sched, Exception):
                 _LOGGER.debug(
                     "Schedule fetch failed for zone %s: %s", zone.zone_id, sched
                 )
                 continue
             zone.schedule = sched
+
+        if dhw_units:
+            dhw_results = await asyncio.gather(
+                *(self.client.async_get_dhw_schedule(d.dhw_id) for d in dhw_units),
+                return_exceptions=True,
+            )
+            for dhw, sched in zip(dhw_units, dhw_results):
+                if isinstance(sched, Exception):
+                    _LOGGER.debug(
+                        "Schedule fetch failed for DHW %s: %s", dhw.dhw_id, sched
+                    )
+                    continue
+                dhw.schedule = sched
