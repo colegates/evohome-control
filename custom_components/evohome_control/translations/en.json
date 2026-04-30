@@ -1,0 +1,61 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Evohome account",
+        "description": "Sign in with the username and password you use for the Resideo / Total Connect Comfort app.",
+        "data": {
+          "username": "Username (email)",
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Invalid username or password.",
+      "cannot_connect": "Could not contact the Resideo TCC servers.",
+      "unknown": "Unexpected error - check the logs."
+    },
+    "abort": {
+      "already_configured": "This Evohome account is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Evohome Control options",
+        "data": {
+          "scan_interval": "Polling interval (seconds)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "low_battery": {
+        "name": "Battery"
+      },
+      "fault": {
+        "name": "Fault"
+      },
+      "overridden": {
+        "name": "Overridden"
+      }
+    },
+    "button": {
+      "resume_schedule": {
+        "name": "Resume schedule"
+      },
+      "heating_off": {
+        "name": "Heating off"
+      },
+      "away": {
+        "name": "Away"
+      }
+    },
+    "sensor": {
+      "next_switchpoint": {
+        "name": "Next switchpoint"
+      }
+    }
+  }
+}

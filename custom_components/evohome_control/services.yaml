@@ -1,0 +1,410 @@
+get_schedule:
+  name: Get zone schedule
+  description: >-
+    Return the current weekly heating schedule for a single Evohome zone.
+  fields:
+    zone_id:
+      name: Zone ID
+      description: The Resideo TCC zone identifier (visible as zone_id in the climate entity attributes).
+      required: true
+      example: "1909976"
+      selector:
+        text:
+    location_id:
+      name: Location ID
+      description: Required only when the same zone_id appears in more than one location.
+      required: false
+      example: "1706229"
+      selector:
+        text:
+
+set_schedule:
+  name: Set zone schedule
+  description: >-
+    Replace the weekly heating schedule for a single Evohome zone. Accepts the
+    Resideo native shape ({"dailySchedules": [...]}) or the snake_case form
+    ({"daily_schedules": [...]}). Any missing day is filled by repeating the
+    preceding day, so a 1-day schedule applied to "Monday" will run all week.
+  fields:
+    zone_id:
+      name: Zone ID
+      required: true
+      example: "1909976"
+      selector:
+        text:
+    location_id:
+      name: Location ID
+      description: Required only when the same zone_id appears in more than one location.
+      required: false
+      example: "1706229"
+      selector:
+        text:
+    schedule:
+      name: Schedule
+      description: >-
+        The schedule to apply. Each switchpoint needs a timeOfDay (HH:MM[:SS])
+        and heatSetpoint (5..35).
+      required: true
+      example: |
+        dailySchedules:
+          - dayOfWeek: Monday
+            switchpoints:
+              - timeOfDay: "06:30:00"
+                heatSetpoint: 21.0
+              - timeOfDay: "08:00:00"
+                heatSetpoint: 18.0
+              - timeOfDay: "18:00:00"
+                heatSetpoint: 21.0
+              - timeOfDay: "21:00:00"
+                heatSetpoint: 16.0
+      selector:
+        object:
+
+refresh_schedules:
+  name: Refresh all data
+  description: Force a poll of every configured Evohome location.
+
+copy_zone_schedule:
+  name: Copy schedule between zones
+  description: >-
+    Copy the weekly heating schedule from one zone onto another. Both zones
+    must be on the same Evohome account; pass location_id to disambiguate
+    when the same zone_id appears in more than one location.
+  fields:
+    from_zone_id:
+      name: Source zone ID
+      required: true
+      example: "1909976"
+      selector:
+        text:
+    to_zone_id:
+      name: Target zone ID
+      required: true
+      example: "1909977"
+      selector:
+        text:
+    location_id:
+      name: Location ID
+      required: false
+      example: "1706229"
+      selector:
+        text:
+
+set_zone_temperature_until:
+  name: Override zone temperature
+  description: >-
+    Apply a heat setpoint override to one or more zones. With no duration/until
+    this is a permanent override; supplying duration or until creates a
+    temporary override that the system reverts to schedule afterwards. Pass
+    either zone_id (single) or zone_ids (a list) - the same temperature is
+    applied to every zone.
+  fields:
+    zone_id:
+      name: Zone ID
+      description: Single zone (mutually exclusive with zone_ids).
+      required: false
+      example: "1909976"
+      selector:
+        text:
+    zone_ids:
+      name: Zone IDs
+      description: Bulk override - list of zone IDs (mutually exclusive with zone_id).
+      required: false
+      example: ["1909976", "1909977", "1909981"]
+      selector:
+        object:
+    temperature:
+      name: Setpoint
+      required: true
+      example: 21.0
+      selector:
+        number:
+          min: 5
+          max: 35
+          step: 0.5
+          unit_of_measurement: "°C"
+    duration:
+      name: Duration
+      description: How long the override should last (mutually exclusive with `until`).
+      required: false
+      example: "01:30:00"
+      selector:
+        duration:
+    until:
+      name: Until
+      description: Absolute time the override should end (mutually exclusive with `duration`).
+      required: false
+      example: "2026-01-01 22:00:00"
+      selector:
+        datetime:
+    location_id:
+      name: Location ID
+      required: false
+      example: "1706229"
+      selector:
+        text:
+
+clear_zone_override:
+  name: Clear zone override
+  description: Return a zone to FollowSchedule (cancels any active override).
+  fields:
+    zone_id:
+      name: Zone ID
+      required: true
+      example: "1909976"
+      selector:
+        text:
+    location_id:
+      name: Location ID
+      required: false
+      example: "1706229"
+      selector:
+        text:
+
+apply_day_schedule:
+  name: Apply day schedule across zones
+  description: >-
+    Replace one or more days' switchpoints across one or more zones in a single
+    call. The supplied switchpoints are applied to every (zone, day) pair;
+    days not listed are left untouched. Useful for rolling out a new
+    weekday/weekend pattern across the whole house.
+  fields:
+    zone_ids:
+      name: Zone IDs
+      required: true
+      example: ["1909976", "1909977", "1909978"]
+      selector:
+        object:
+    days_of_week:
+      name: Days of week
+      required: true
+      example: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+      selector:
+        select:
+          multiple: true
+          options:
+            - Monday
+            - Tuesday
+            - Wednesday
+            - Thursday
+            - Friday
+            - Saturday
+            - Sunday
+    switchpoints:
+      name: Switchpoints
+      description: List of {timeOfDay, heatSetpoint} entries.
+      required: true
+      example: |
+        - { timeOfDay: "06:30:00", heatSetpoint: 21.0 }
+        - { timeOfDay: "08:30:00", heatSetpoint: 18.0 }
+        - { timeOfDay: "17:30:00", heatSetpoint: 21.0 }
+        - { timeOfDay: "22:00:00", heatSetpoint: 16.0 }
+      selector:
+        object:
+    location_id:
+      name: Location ID
+      required: false
+      example: "1706229"
+      selector:
+        text:
+
+away_until:
+  name: Away until
+  description: Set every (or one) location to Away mode until a specific time.
+  fields:
+    until:
+      name: Until
+      required: true
+      example: "2026-01-08 09:00:00"
+      selector:
+        datetime:
+    location_id:
+      name: Location ID
+      description: Limit to a single location (default - apply to all).
+      required: false
+      example: "1706229"
+      selector:
+        text:
+
+boost:
+  name: Boost zone(s)
+  description: >-
+    Apply a temporary heat-setpoint override (default 21°C for 1 hour) to one
+    or more zones. Sugar over set_zone_temperature_until.
+  fields:
+    zone_id:
+      name: Zone ID
+      required: false
+      example: "1909976"
+      selector:
+        text:
+    zone_ids:
+      name: Zone IDs
+      required: false
+      example: ["1909976", "1909977"]
+      selector:
+        object:
+    temperature:
+      name: Setpoint
+      required: false
+      example: 21.0
+      default: 21.0
+      selector:
+        number:
+          min: 5
+          max: 35
+          step: 0.5
+          unit_of_measurement: "°C"
+    duration:
+      name: Duration
+      required: false
+      example: "01:00:00"
+      default: "01:00:00"
+      selector:
+        duration:
+    location_id:
+      name: Location ID
+      required: false
+      example: "1706229"
+      selector:
+        text:
+
+save_preset:
+  name: Save schedule preset
+  description: >-
+    Capture the current weekly schedule of every zone (or a chosen subset) under
+    a human-readable name. Stored persistently in HA's .storage directory.
+  fields:
+    name:
+      name: Preset name
+      required: true
+      example: comfort
+      selector:
+        text:
+    zone_ids:
+      name: Zone IDs
+      description: Limit to specific zones (default - every zone on the account).
+      required: false
+      example: ["1909976", "1909977"]
+      selector:
+        object:
+    location_id:
+      name: Location ID
+      required: false
+      example: "1706229"
+      selector:
+        text:
+
+apply_preset:
+  name: Apply schedule preset
+  description: Restore a previously-saved preset to its zones (or a subset).
+  fields:
+    name:
+      name: Preset name
+      required: true
+      example: comfort
+      selector:
+        text:
+    zone_ids:
+      name: Zone IDs
+      description: Limit which zones from the preset are applied.
+      required: false
+      example: ["1909976"]
+      selector:
+        object:
+
+list_presets:
+  name: List schedule presets
+  description: Return the names of all saved presets (response service).
+
+delete_preset:
+  name: Delete schedule preset
+  description: Remove a saved preset.
+  fields:
+    name:
+      name: Preset name
+      required: true
+      example: holiday
+      selector:
+        text:
+
+export_schedules:
+  name: Export schedules
+  description: >-
+    Return the full weekly schedule of every zone (or a chosen subset) as a
+    response. Pipe the response into a notify or file action to back up your
+    schedules.
+  fields:
+    zone_ids:
+      name: Zone IDs
+      required: false
+      example: ["1909976"]
+      selector:
+        object:
+    location_id:
+      name: Location ID
+      required: false
+      example: "1706229"
+      selector:
+        text:
+
+import_schedules:
+  name: Import schedules
+  description: >-
+    Bulk-write schedules previously produced by export_schedules. Each entry
+    must include zone_id and schedule.
+  fields:
+    schedules:
+      name: Schedules
+      required: true
+      example: |
+        - zone_id: "1909976"
+          schedule:
+            dailySchedules:
+              - dayOfWeek: Monday
+                switchpoints:
+                  - { timeOfDay: "06:30", heatSetpoint: 21.0 }
+      selector:
+        object:
+
+set_system_mode:
+  name: Set system mode
+  description: >-
+    Change the operating mode of a location's TCS (Auto / AutoWithEco /
+    AutoWithReset / Away / DayOff / HeatingOff / Custom). Passing `until` makes
+    it temporary.
+  fields:
+    location_id:
+      name: Location ID
+      required: true
+      example: "1706229"
+      selector:
+        text:
+    system_mode:
+      name: Mode
+      required: true
+      example: Away
+      selector:
+        select:
+          options:
+            - Auto
+            - AutoWithEco
+            - AutoWithReset
+            - Away
+            - DayOff
+            - HeatingOff
+            - Custom
+    permanent:
+      name: Permanent
+      description: Apply the mode permanently (default true). Ignored when `until` is given.
+      required: false
+      default: true
+      selector:
+        boolean:
+    until:
+      name: Until
+      description: Absolute time at which the system should revert.
+      required: false
+      example: "2026-01-08 09:00:00"
+      selector:
+        datetime:
