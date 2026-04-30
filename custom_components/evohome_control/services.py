@@ -20,6 +20,7 @@ from homeassistant.helpers import config_validation as cv
 from .const import (
     ATTR_DAILY_SCHEDULES,
     ATTR_DAY_OF_WEEK,
+    ATTR_DAYS_OF_WEEK,
     ATTR_DURATION,
     ATTR_FROM_ZONE_ID,
     ATTR_HEAT_SETPOINT,
@@ -33,8 +34,10 @@ from .const import (
     ATTR_TO_ZONE_ID,
     ATTR_UNTIL,
     ATTR_ZONE_ID,
+    ATTR_ZONE_IDS,
     DAYS_OF_WEEK,
     DOMAIN,
+    SERVICE_APPLY_DAY_SCHEDULE,
     SERVICE_CLEAR_ZONE_OVERRIDE,
     SERVICE_COPY_SCHEDULE,
     SERVICE_GET_SCHEDULE,
@@ -110,7 +113,10 @@ _COPY_SCHEMA = vol.Schema(
 _OVERRIDE_SCHEMA = vol.All(
     vol.Schema(
         {
-            vol.Required(ATTR_ZONE_ID): cv.string,
+            vol.Exclusive(ATTR_ZONE_ID, "zone"): cv.string,
+            vol.Exclusive(ATTR_ZONE_IDS, "zone"): vol.All(
+                cv.ensure_list, [cv.string]
+            ),
             vol.Required(ATTR_TEMPERATURE): vol.All(
                 vol.Coerce(float), vol.Range(min=5, max=35)
             ),
@@ -119,7 +125,15 @@ _OVERRIDE_SCHEMA = vol.All(
             vol.Optional(ATTR_LOCATION_ID): cv.string,
         }
     ),
+    lambda v: v if (ATTR_ZONE_ID in v or ATTR_ZONE_IDS in v) else _raise(
+        "set_zone_temperature_until requires zone_id or zone_ids"
+    ),
 )
+
+
+def _raise(msg: str):
+    raise vol.Invalid(msg)
+
 _CLEAR_SCHEMA = vol.Schema(
     {
         vol.Required(ATTR_ZONE_ID): cv.string,
@@ -132,6 +146,18 @@ _SET_MODE_SCHEMA = vol.Schema(
         vol.Required(ATTR_SYSTEM_MODE): cv.string,
         vol.Optional(ATTR_PERMANENT, default=True): cv.boolean,
         vol.Optional(ATTR_UNTIL): cv.datetime,
+    }
+)
+_APPLY_DAY_SCHEMA = vol.Schema(
+    {
+        vol.Required(ATTR_ZONE_IDS): vol.All(cv.ensure_list, [cv.string], vol.Length(min=1)),
+        vol.Required(ATTR_DAYS_OF_WEEK): vol.All(
+            cv.ensure_list, [vol.In(DAYS_OF_WEEK)], vol.Length(min=1)
+        ),
+        vol.Required(ATTR_SWITCHPOINTS): vol.All(
+            cv.ensure_list, [_SWITCHPOINT_SCHEMA], vol.Length(min=1)
+        ),
+        vol.Optional(ATTR_LOCATION_ID): cv.string,
     }
 )
 
@@ -182,6 +208,12 @@ def async_register_services(hass: HomeAssistant) -> None:
         _make_set_system_mode(hass),
         schema=_SET_MODE_SCHEMA,
     )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_APPLY_DAY_SCHEDULE,
+        _make_apply_day_schedule(hass),
+        schema=_APPLY_DAY_SCHEMA,
+    )
 
 
 def async_unregister_services(hass: HomeAssistant) -> None:
@@ -190,6 +222,7 @@ def async_unregister_services(hass: HomeAssistant) -> None:
         SERVICE_SET_SCHEDULE,
         SERVICE_REFRESH_SCHEDULES,
         SERVICE_COPY_SCHEDULE,
+        SERVICE_APPLY_DAY_SCHEDULE,
         SERVICE_SET_ZONE_OVERRIDE,
         SERVICE_CLEAR_ZONE_OVERRIDE,
         SERVICE_SET_SYSTEM_MODE,
@@ -336,9 +369,17 @@ def _make_copy_schedule(hass: HomeAssistant):
 
 def _make_set_override(hass: HomeAssistant):
     async def _override(call: ServiceCall) -> None:
-        coord, zone = _resolve_zone(
-            hass, call.data[ATTR_ZONE_ID], call.data.get(ATTR_LOCATION_ID)
-        )
+        zone_ids: list[str]
+        if ATTR_ZONE_IDS in call.data:
+            zone_ids = list(call.data[ATTR_ZONE_IDS])
+        else:
+            zone_ids = [call.data[ATTR_ZONE_ID]]
+
+        loc_id = call.data.get(ATTR_LOCATION_ID)
+        targets: list[tuple[EvohomeDataUpdateCoordinator, ZoneData]] = [
+            _resolve_zone(hass, zid, loc_id) for zid in zone_ids
+        ]
+
         temp = float(call.data[ATTR_TEMPERATURE])
         until_dt: datetime | None = None
         if ATTR_UNTIL in call.data:
@@ -346,22 +387,82 @@ def _make_set_override(hass: HomeAssistant):
         elif ATTR_DURATION in call.data:
             until_dt = datetime.now(timezone.utc) + call.data[ATTR_DURATION]
 
-        if until_dt is None:
-            await coord.client.async_set_zone_heat_setpoint(
-                zone.zone_id,
-                setpoint_mode="PermanentOverride",
-                heat_setpoint_value=temp,
-            )
-        else:
-            await coord.client.async_set_zone_heat_setpoint(
-                zone.zone_id,
-                setpoint_mode="TemporaryOverride",
-                heat_setpoint_value=temp,
-                time_until=_format_until(until_dt),
-            )
-        await coord.async_request_refresh()
+        for coord, zone in targets:
+            if until_dt is None:
+                await coord.client.async_set_zone_heat_setpoint(
+                    zone.zone_id,
+                    setpoint_mode="PermanentOverride",
+                    heat_setpoint_value=temp,
+                )
+            else:
+                await coord.client.async_set_zone_heat_setpoint(
+                    zone.zone_id,
+                    setpoint_mode="TemporaryOverride",
+                    heat_setpoint_value=temp,
+                    time_until=_format_until(until_dt),
+                )
+
+        for coord in {c for c, _ in targets}:
+            await coord.async_request_refresh()
 
     return _override
+
+
+def _normalize_switchpoint(sp: dict[str, Any]) -> dict[str, Any]:
+    tod_raw = sp.get("timeOfDay") or sp.get(ATTR_TIME_OF_DAY)
+    parts = str(tod_raw).split(":")
+    if len(parts) < 2 or len(parts) > 3:
+        raise HomeAssistantError(f"Invalid timeOfDay: {tod_raw!r}")
+    h, m = parts[0], parts[1]
+    s = parts[2] if len(parts) == 3 else "00"
+    tod = f"{int(h):02d}:{int(m):02d}:{int(s):02d}"
+    setpoint = (
+        sp["heatSetpoint"]
+        if "heatSetpoint" in sp
+        else sp[ATTR_HEAT_SETPOINT]
+    )
+    return {"timeOfDay": tod, "heatSetpoint": float(setpoint)}
+
+
+def _make_apply_day_schedule(hass: HomeAssistant):
+    """Apply one set of switchpoints to several zones x several days at once.
+
+    For each target zone we GET the current schedule, replace the switchpoints
+    on each requested day with the supplied ones (sorted by time), and PUT
+    the result back. Days not listed are left untouched.
+    """
+
+    async def _apply(call: ServiceCall) -> None:
+        loc_id = call.data.get(ATTR_LOCATION_ID)
+        zone_ids = list(call.data[ATTR_ZONE_IDS])
+        days = list(call.data[ATTR_DAYS_OF_WEEK])
+        new_switchpoints = sorted(
+            (_normalize_switchpoint(sp) for sp in call.data[ATTR_SWITCHPOINTS]),
+            key=lambda sp: sp["timeOfDay"],
+        )
+
+        targets = [_resolve_zone(hass, zid, loc_id) for zid in zone_ids]
+        for coord, zone in targets:
+            current = await coord.client.async_get_zone_schedule(zone.zone_id)
+            updated_days = []
+            for d in current.get("dailySchedules", []):
+                if d.get("dayOfWeek") in days:
+                    updated_days.append(
+                        {
+                            "dayOfWeek": d["dayOfWeek"],
+                            "switchpoints": [dict(sp) for sp in new_switchpoints],
+                        }
+                    )
+                else:
+                    updated_days.append(d)
+            await coord.client.async_set_zone_schedule(
+                zone.zone_id, {"dailySchedules": updated_days}
+            )
+
+        for coord in {c for c, _ in targets}:
+            await coord.async_request_refresh()
+
+    return _apply
 
 
 def _make_clear_override(hass: HomeAssistant):

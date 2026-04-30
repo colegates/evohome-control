@@ -93,16 +93,26 @@ copy_zone_schedule:
 set_zone_temperature_until:
   name: Override zone temperature
   description: >-
-    Apply a heat setpoint override to a zone. With no duration/until this is a
-    permanent override; supplying duration or until creates a temporary override
-    that the system reverts to schedule afterwards.
+    Apply a heat setpoint override to one or more zones. With no duration/until
+    this is a permanent override; supplying duration or until creates a
+    temporary override that the system reverts to schedule afterwards. Pass
+    either zone_id (single) or zone_ids (a list) - the same temperature is
+    applied to every zone.
   fields:
     zone_id:
       name: Zone ID
-      required: true
+      description: Single zone (mutually exclusive with zone_ids).
+      required: false
       example: "1909976"
       selector:
         text:
+    zone_ids:
+      name: Zone IDs
+      description: Bulk override - list of zone IDs (mutually exclusive with zone_id).
+      required: false
+      example: ["1909976", "1909977", "1909981"]
+      selector:
+        object:
     temperature:
       name: Setpoint
       required: true
@@ -144,6 +154,53 @@ clear_zone_override:
       example: "1909976"
       selector:
         text:
+    location_id:
+      name: Location ID
+      required: false
+      example: "1706229"
+      selector:
+        text:
+
+apply_day_schedule:
+  name: Apply day schedule across zones
+  description: >-
+    Replace one or more days' switchpoints across one or more zones in a single
+    call. The supplied switchpoints are applied to every (zone, day) pair;
+    days not listed are left untouched. Useful for rolling out a new
+    weekday/weekend pattern across the whole house.
+  fields:
+    zone_ids:
+      name: Zone IDs
+      required: true
+      example: ["1909976", "1909977", "1909978"]
+      selector:
+        object:
+    days_of_week:
+      name: Days of week
+      required: true
+      example: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+      selector:
+        select:
+          multiple: true
+          options:
+            - Monday
+            - Tuesday
+            - Wednesday
+            - Thursday
+            - Friday
+            - Saturday
+            - Sunday
+    switchpoints:
+      name: Switchpoints
+      description: List of {timeOfDay, heatSetpoint} entries.
+      required: true
+      example: |
+        - { timeOfDay: "06:30:00", heatSetpoint: 21.0 }
+        - { timeOfDay: "08:30:00", heatSetpoint: 18.0 }
+        - { timeOfDay: "17:30:00", heatSetpoint: 21.0 }
+        - { timeOfDay: "22:00:00", heatSetpoint: 16.0 }
+      selector:
+        object:
     location_id:
       name: Location ID
       required: false

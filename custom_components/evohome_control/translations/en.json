@@ -30,6 +30,25 @@
     }
   },
   "entity": {
+    "binary_sensor": {
+      "low_battery": {
+        "name": "Battery"
+      },
+      "fault": {
+        "name": "Fault"
+      }
+    },
+    "button": {
+      "resume_schedule": {
+        "name": "Resume schedule"
+      },
+      "heating_off": {
+        "name": "Heating off"
+      },
+      "away": {
+        "name": "Away"
+      }
+    },
     "sensor": {
       "next_switchpoint": {
         "name": "Next switchpoint"

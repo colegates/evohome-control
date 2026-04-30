@@ -48,11 +48,44 @@ Working against the live API:
 |---|---|
 | `evohome_control.get_schedule` | Returns the current weekly schedule for a zone (response service). |
 | `evohome_control.set_schedule` | Replaces the weekly schedule for a zone. |
+| `evohome_control.apply_day_schedule` | Replace one or more days' switchpoints across one or more zones in a single call. |
 | `evohome_control.copy_zone_schedule` | Copies the schedule from one zone onto another. |
-| `evohome_control.set_zone_temperature_until` | Override a zone's setpoint (permanent, or for a duration / until a time). |
+| `evohome_control.set_zone_temperature_until` | Override a zone's (or several zones') setpoint - permanent, for a duration, or until a time. |
 | `evohome_control.clear_zone_override` | Return a zone to FollowSchedule. |
 | `evohome_control.set_system_mode` | Change the system mode of a location (optionally until a time). |
 | `evohome_control.refresh_schedules` | Force-poll every location. |
+
+## Bulk schedule editing
+
+To roll out a new weekday pattern to several zones in one call:
+
+```yaml
+service: evohome_control.apply_day_schedule
+data:
+  zone_ids:
+    - "1909976"   # Dog Room
+    - "1909978"   # Kitchen Dining
+    - "1909980"   # Kitchen
+  days_of_week: [Monday, Tuesday, Wednesday, Thursday, Friday]
+  switchpoints:
+    - { timeOfDay: "06:30", heatSetpoint: 21.0 }
+    - { timeOfDay: "08:30", heatSetpoint: 18.0 }
+    - { timeOfDay: "17:30", heatSetpoint: 21.0 }
+    - { timeOfDay: "22:00", heatSetpoint: 16.0 }
+```
+
+Days not listed are left untouched, so the same call can be issued again with
+`days_of_week: [Saturday, Sunday]` and a different switchpoint list to set a
+weekend pattern.
+
+## Low-battery alerts
+
+Each zone exposes two binary sensors:
+
+  * `binary_sensor.<zone>_battery` (device_class `battery`) - on whenever the
+    zone reports a low-battery fault for its sensor or actuator
+  * `binary_sensor.<zone>_fault` (device_class `problem`) - on whenever the
+    zone reports any active fault (low battery, comms loss, etc.)
 
 ### Example: set a weekday-vs-weekend schedule
 

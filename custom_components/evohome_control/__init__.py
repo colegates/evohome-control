@@ -24,6 +24,8 @@ from .services import async_register_services, async_unregister_services
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [
+    Platform.BINARY_SENSOR,
+    Platform.BUTTON,
     Platform.CLIMATE,
     Platform.SELECT,
     Platform.SENSOR,

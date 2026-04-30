@@ -40,6 +40,7 @@ class ZoneData:
     target_setpoint: float | None
     setpoint_mode: str | None
     is_available: bool
+    active_faults: list[dict[str, Any]] = field(default_factory=list)
     schedule: dict[str, Any] | None = None  # {"dailySchedules": [...]}
 
 
@@ -231,6 +232,7 @@ class EvohomeDataUpdateCoordinator(DataUpdateCoordinator[EvohomeData]):
                         )
                         zone.setpoint_mode = sp.get("setpointMode")
                         zone.is_available = is_avail
+                        zone.active_faults = list(z.get("activeFaults") or [])
 
     async def _update_schedules(self, data: EvohomeData) -> None:
         """Pull schedules for every zone (and DHW) concurrently."""
