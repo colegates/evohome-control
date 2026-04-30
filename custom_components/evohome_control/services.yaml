@@ -208,6 +208,165 @@ apply_day_schedule:
       selector:
         text:
 
+away_until:
+  name: Away until
+  description: Set every (or one) location to Away mode until a specific time.
+  fields:
+    until:
+      name: Until
+      required: true
+      example: "2026-01-08 09:00:00"
+      selector:
+        datetime:
+    location_id:
+      name: Location ID
+      description: Limit to a single location (default - apply to all).
+      required: false
+      example: "1706229"
+      selector:
+        text:
+
+boost:
+  name: Boost zone(s)
+  description: >-
+    Apply a temporary heat-setpoint override (default 21°C for 1 hour) to one
+    or more zones. Sugar over set_zone_temperature_until.
+  fields:
+    zone_id:
+      name: Zone ID
+      required: false
+      example: "1909976"
+      selector:
+        text:
+    zone_ids:
+      name: Zone IDs
+      required: false
+      example: ["1909976", "1909977"]
+      selector:
+        object:
+    temperature:
+      name: Setpoint
+      required: false
+      example: 21.0
+      default: 21.0
+      selector:
+        number:
+          min: 5
+          max: 35
+          step: 0.5
+          unit_of_measurement: "°C"
+    duration:
+      name: Duration
+      required: false
+      example: "01:00:00"
+      default: "01:00:00"
+      selector:
+        duration:
+    location_id:
+      name: Location ID
+      required: false
+      example: "1706229"
+      selector:
+        text:
+
+save_preset:
+  name: Save schedule preset
+  description: >-
+    Capture the current weekly schedule of every zone (or a chosen subset) under
+    a human-readable name. Stored persistently in HA's .storage directory.
+  fields:
+    name:
+      name: Preset name
+      required: true
+      example: comfort
+      selector:
+        text:
+    zone_ids:
+      name: Zone IDs
+      description: Limit to specific zones (default - every zone on the account).
+      required: false
+      example: ["1909976", "1909977"]
+      selector:
+        object:
+    location_id:
+      name: Location ID
+      required: false
+      example: "1706229"
+      selector:
+        text:
+
+apply_preset:
+  name: Apply schedule preset
+  description: Restore a previously-saved preset to its zones (or a subset).
+  fields:
+    name:
+      name: Preset name
+      required: true
+      example: comfort
+      selector:
+        text:
+    zone_ids:
+      name: Zone IDs
+      description: Limit which zones from the preset are applied.
+      required: false
+      example: ["1909976"]
+      selector:
+        object:
+
+list_presets:
+  name: List schedule presets
+  description: Return the names of all saved presets (response service).
+
+delete_preset:
+  name: Delete schedule preset
+  description: Remove a saved preset.
+  fields:
+    name:
+      name: Preset name
+      required: true
+      example: holiday
+      selector:
+        text:
+
+export_schedules:
+  name: Export schedules
+  description: >-
+    Return the full weekly schedule of every zone (or a chosen subset) as a
+    response. Pipe the response into a notify or file action to back up your
+    schedules.
+  fields:
+    zone_ids:
+      name: Zone IDs
+      required: false
+      example: ["1909976"]
+      selector:
+        object:
+    location_id:
+      name: Location ID
+      required: false
+      example: "1706229"
+      selector:
+        text:
+
+import_schedules:
+  name: Import schedules
+  description: >-
+    Bulk-write schedules previously produced by export_schedules. Each entry
+    must include zone_id and schedule.
+  fields:
+    schedules:
+      name: Schedules
+      required: true
+      example: |
+        - zone_id: "1909976"
+          schedule:
+            dailySchedules:
+              - dayOfWeek: Monday
+                switchpoints:
+                  - { timeOfDay: "06:30", heatSetpoint: 21.0 }
+      selector:
+        object:
+
 set_system_mode:
   name: Set system mode
   description: >-

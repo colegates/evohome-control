@@ -30,6 +30,18 @@ SERVICE_REFRESH_SCHEDULES: Final = "refresh_schedules"
 SERVICE_SET_SYSTEM_MODE: Final = "set_system_mode"
 SERVICE_SET_ZONE_OVERRIDE: Final = "set_zone_temperature_until"
 SERVICE_CLEAR_ZONE_OVERRIDE: Final = "clear_zone_override"
+SERVICE_AWAY_UNTIL: Final = "away_until"
+SERVICE_BOOST: Final = "boost"
+SERVICE_SAVE_PRESET: Final = "save_preset"
+SERVICE_APPLY_PRESET: Final = "apply_preset"
+SERVICE_LIST_PRESETS: Final = "list_presets"
+SERVICE_DELETE_PRESET: Final = "delete_preset"
+SERVICE_EXPORT_SCHEDULES: Final = "export_schedules"
+SERVICE_IMPORT_SCHEDULES: Final = "import_schedules"
+
+# Storage keys.
+STORAGE_VERSION: Final = 1
+STORAGE_KEY_PRESETS: Final = "evohome_control_presets"
 
 # Service / attribute keys.
 ATTR_LOCATION_ID: Final = "location_id"
@@ -49,3 +61,6 @@ ATTR_DURATION: Final = "duration"
 ATTR_UNTIL: Final = "until"
 ATTR_SYSTEM_MODE: Final = "system_mode"
 ATTR_PERMANENT: Final = "permanent"
+ATTR_NAME: Final = "name"
+ATTR_PRESET_NAME: Final = "preset_name"
+ATTR_SCHEDULES: Final = "schedules"

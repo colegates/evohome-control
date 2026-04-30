@@ -36,6 +36,9 @@
       },
       "fault": {
         "name": "Fault"
+      },
+      "overridden": {
+        "name": "Overridden"
       }
     },
     "button": {

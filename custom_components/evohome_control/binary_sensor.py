@@ -55,6 +55,7 @@ async def async_setup_entry(
             known.add(zone.zone_id)
             new.append(LowBatteryBinarySensor(coordinator, zone.zone_id))
             new.append(FaultBinarySensor(coordinator, zone.zone_id))
+            new.append(OverriddenBinarySensor(coordinator, zone.zone_id))
         if new:
             async_add_entities(new)
 
@@ -131,6 +132,41 @@ class LowBatteryBinarySensor(_ZoneBinarySensorBase):
             "zone_id": zone.zone_id,
             "fault_type": battery_faults[0].get("faultType"),
             "since": battery_faults[0].get("since"),
+        }
+
+
+class OverriddenBinarySensor(_ZoneBinarySensorBase):
+    """On whenever the live setpoint deviates from the schedule."""
+
+    _attr_translation_key = "overridden"
+
+    def __init__(
+        self, coordinator: EvohomeDataUpdateCoordinator, zone_id: str
+    ) -> None:
+        super().__init__(coordinator, zone_id)
+        self._attr_unique_id = f"{DOMAIN}_zone_{zone_id}_overridden"
+
+    @property
+    def name(self) -> str | None:
+        zone = self._zone
+        return f"{zone.name} overridden" if zone else None
+
+    @property
+    def is_on(self) -> bool | None:
+        zone = self._zone
+        if not zone or zone.setpoint_mode is None:
+            return None
+        return zone.setpoint_mode != "FollowSchedule"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        zone = self._zone
+        if not zone:
+            return {}
+        return {
+            "zone_id": zone.zone_id,
+            "setpoint_mode": zone.setpoint_mode,
+            "target_setpoint": zone.target_setpoint,
         }
 
 

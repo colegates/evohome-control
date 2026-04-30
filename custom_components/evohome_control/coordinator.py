@@ -3,6 +3,29 @@
 The coordinator polls every location on the account and merges installation
 info, status and schedule into a single per-zone view that the platforms
 consume.
+
+Synchronisation model
+---------------------
+
+Changes can come from either side at any moment - the user editing in the
+Resideo app, or HA running a service. To keep the two views consistent:
+
+  1. **Every poll** (default 180s, configurable via the integration's
+     options flow) the coordinator re-fetches installation info, location
+     status (incl. active faults / setpoints / system mode), and the full
+     weekly schedule for every zone. Anything changed in the app appears in
+     HA within one cycle.
+  2. The installation topology (zone names, new zones, replaced TRVs) is
+     **also re-pulled each poll**, with fallback to the previously cached
+     copy if a refresh fails - so renames in the app propagate without
+     restarting HA.
+  3. Service calls that patch part of a schedule (``apply_day_schedule``,
+     ``copy_zone_schedule``) always GET-modify-PUT against the live API, so
+     they cannot clobber unrelated changes you just made in the app.
+  4. After every write the coordinator force-refreshes so HA's view updates
+     immediately rather than waiting for the next interval.
+
+Each entity exposes ``last_updated`` so users can confirm sync is healthy.
 """
 
 from __future__ import annotations
@@ -10,7 +33,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -79,6 +102,8 @@ class LocationData:
 @dataclass
 class EvohomeData:
     locations: dict[str, LocationData] = field(default_factory=dict)
+    last_updated: datetime | None = None
+    installation_age_seconds: float | None = None  # how stale the topology is
 
     def iter_zones(self) -> list[ZoneData]:
         return [z for loc in self.locations.values() for z in loc.zones.values()]
@@ -101,6 +126,7 @@ class EvohomeDataUpdateCoordinator(DataUpdateCoordinator[EvohomeData]):
         )
         self.client = client
         self._installation: list[dict[str, Any]] | None = None
+        self._installation_fetched_at: datetime | None = None
 
     @property
     def installation(self) -> list[dict[str, Any]]:
@@ -108,12 +134,33 @@ class EvohomeDataUpdateCoordinator(DataUpdateCoordinator[EvohomeData]):
             raise RuntimeError("Installation info has not been loaded yet")
         return self._installation
 
+    async def _refresh_installation(self) -> None:
+        """Refetch installation topology, falling back to cache on failure."""
+        try:
+            self._installation = await self.client.async_get_locations()
+            self._installation_fetched_at = datetime.now(timezone.utc)
+        except EvohomeApiError as err:
+            if self._installation is None:
+                raise  # nothing to fall back to
+            _LOGGER.warning(
+                "Refreshing Evohome installation info failed (%s); using cached "
+                "topology - rename/new-zone changes will not appear until the "
+                "next successful refresh",
+                err,
+            )
+
     async def _async_update_data(self) -> EvohomeData:
         try:
-            if self._installation is None:
-                self._installation = await self.client.async_get_locations()
-
-            data = EvohomeData()
+            await self._refresh_installation()
+            now = datetime.now(timezone.utc)
+            data = EvohomeData(
+                last_updated=now,
+                installation_age_seconds=(
+                    (now - self._installation_fetched_at).total_seconds()
+                    if self._installation_fetched_at
+                    else None
+                ),
+            )
             for loc_cfg in self._installation:
                 info = loc_cfg["locationInfo"]
                 loc = LocationData(

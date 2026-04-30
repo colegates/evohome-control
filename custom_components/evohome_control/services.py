@@ -25,8 +25,11 @@ from .const import (
     ATTR_FROM_ZONE_ID,
     ATTR_HEAT_SETPOINT,
     ATTR_LOCATION_ID,
+    ATTR_NAME,
     ATTR_PERMANENT,
+    ATTR_PRESET_NAME,
     ATTR_SCHEDULE,
+    ATTR_SCHEDULES,
     ATTR_SWITCHPOINTS,
     ATTR_SYSTEM_MODE,
     ATTR_TEMPERATURE,
@@ -38,15 +41,24 @@ from .const import (
     DAYS_OF_WEEK,
     DOMAIN,
     SERVICE_APPLY_DAY_SCHEDULE,
+    SERVICE_APPLY_PRESET,
+    SERVICE_AWAY_UNTIL,
+    SERVICE_BOOST,
     SERVICE_CLEAR_ZONE_OVERRIDE,
     SERVICE_COPY_SCHEDULE,
+    SERVICE_DELETE_PRESET,
+    SERVICE_EXPORT_SCHEDULES,
     SERVICE_GET_SCHEDULE,
+    SERVICE_IMPORT_SCHEDULES,
+    SERVICE_LIST_PRESETS,
     SERVICE_REFRESH_SCHEDULES,
+    SERVICE_SAVE_PRESET,
     SERVICE_SET_SCHEDULE,
     SERVICE_SET_SYSTEM_MODE,
     SERVICE_SET_ZONE_OVERRIDE,
 )
 from .coordinator import EvohomeDataUpdateCoordinator, LocationData, ZoneData
+from .presets import PresetStore
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -160,11 +172,59 @@ _APPLY_DAY_SCHEMA = vol.Schema(
         vol.Optional(ATTR_LOCATION_ID): cv.string,
     }
 )
+_AWAY_UNTIL_SCHEMA = vol.Schema(
+    {
+        vol.Optional(ATTR_LOCATION_ID): cv.string,
+        vol.Required(ATTR_UNTIL): cv.datetime,
+    }
+)
+_BOOST_SCHEMA = vol.Schema(
+    {
+        vol.Exclusive(ATTR_ZONE_ID, "zone"): cv.string,
+        vol.Exclusive(ATTR_ZONE_IDS, "zone"): vol.All(
+            cv.ensure_list, [cv.string]
+        ),
+        vol.Optional(ATTR_TEMPERATURE, default=21.0): vol.All(
+            vol.Coerce(float), vol.Range(min=5, max=35)
+        ),
+        vol.Optional(ATTR_DURATION, default={"hours": 1}): cv.time_period,
+        vol.Optional(ATTR_LOCATION_ID): cv.string,
+    }
+)
+_PRESET_NAME_SCHEMA = vol.Schema(
+    {vol.Required(ATTR_NAME): cv.string}
+)
+_PRESET_SAVE_SCHEMA = vol.Schema(
+    {
+        vol.Required(ATTR_NAME): cv.string,
+        vol.Optional(ATTR_ZONE_IDS): vol.All(cv.ensure_list, [cv.string]),
+        vol.Optional(ATTR_LOCATION_ID): cv.string,
+    }
+)
+_PRESET_APPLY_SCHEMA = vol.Schema(
+    {
+        vol.Required(ATTR_NAME): cv.string,
+        vol.Optional(ATTR_ZONE_IDS): vol.All(cv.ensure_list, [cv.string]),
+    }
+)
+_EXPORT_SCHEMA = vol.Schema(
+    {
+        vol.Optional(ATTR_ZONE_IDS): vol.All(cv.ensure_list, [cv.string]),
+        vol.Optional(ATTR_LOCATION_ID): cv.string,
+    }
+)
+_IMPORT_SCHEMA = vol.Schema(
+    {
+        vol.Required(ATTR_SCHEDULES): vol.All(cv.ensure_list, [dict]),
+    }
+)
 
 
 def async_register_services(hass: HomeAssistant) -> None:
     if hass.services.has_service(DOMAIN, SERVICE_SET_SCHEDULE):
         return
+
+    presets = PresetStore(hass)
 
     hass.services.async_register(
         DOMAIN,
@@ -214,6 +274,55 @@ def async_register_services(hass: HomeAssistant) -> None:
         _make_apply_day_schedule(hass),
         schema=_APPLY_DAY_SCHEMA,
     )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_AWAY_UNTIL,
+        _make_away_until(hass),
+        schema=_AWAY_UNTIL_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_BOOST,
+        _make_boost(hass),
+        schema=_BOOST_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_SAVE_PRESET,
+        _make_save_preset(hass, presets),
+        schema=_PRESET_SAVE_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_APPLY_PRESET,
+        _make_apply_preset(hass, presets),
+        schema=_PRESET_APPLY_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_LIST_PRESETS,
+        _make_list_presets(presets),
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_DELETE_PRESET,
+        _make_delete_preset(presets),
+        schema=_PRESET_NAME_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_EXPORT_SCHEDULES,
+        _make_export_schedules(hass),
+        schema=_EXPORT_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_IMPORT_SCHEDULES,
+        _make_import_schedules(hass),
+        schema=_IMPORT_SCHEMA,
+    )
 
 
 def async_unregister_services(hass: HomeAssistant) -> None:
@@ -226,6 +335,14 @@ def async_unregister_services(hass: HomeAssistant) -> None:
         SERVICE_SET_ZONE_OVERRIDE,
         SERVICE_CLEAR_ZONE_OVERRIDE,
         SERVICE_SET_SYSTEM_MODE,
+        SERVICE_AWAY_UNTIL,
+        SERVICE_BOOST,
+        SERVICE_SAVE_PRESET,
+        SERVICE_APPLY_PRESET,
+        SERVICE_LIST_PRESETS,
+        SERVICE_DELETE_PRESET,
+        SERVICE_EXPORT_SCHEDULES,
+        SERVICE_IMPORT_SCHEDULES,
     ):
         hass.services.async_remove(DOMAIN, svc)
 
@@ -501,3 +618,221 @@ def _make_set_system_mode(hass: HomeAssistant):
         await coord.async_request_refresh()
 
     return _set_mode
+
+
+# ---- sugar services -------------------------------------------------
+
+
+def _make_away_until(hass: HomeAssistant):
+    async def _away(call: ServiceCall) -> None:
+        until_dt = call.data[ATTR_UNTIL]
+        loc_id = call.data.get(ATTR_LOCATION_ID)
+        targets: list[tuple[EvohomeDataUpdateCoordinator, LocationData]]
+        if loc_id is not None:
+            targets = [_resolve_location(hass, loc_id)]
+        else:
+            targets = [
+                (coord, loc)
+                for coord in _all_coordinators(hass)
+                for loc in coord.data.locations.values()
+            ]
+        for coord, loc in targets:
+            if loc.primary_tcs_id is None:
+                continue
+            await coord.client.async_set_system_mode(
+                loc.primary_tcs_id,
+                system_mode="Away",
+                permanent=False,
+                time_until=_format_until(until_dt),
+            )
+        for coord in {c for c, _ in targets}:
+            await coord.async_request_refresh()
+
+    return _away
+
+
+def _make_boost(hass: HomeAssistant):
+    async def _boost(call: ServiceCall) -> None:
+        zone_ids: list[str]
+        if ATTR_ZONE_IDS in call.data:
+            zone_ids = list(call.data[ATTR_ZONE_IDS])
+        elif ATTR_ZONE_ID in call.data:
+            zone_ids = [call.data[ATTR_ZONE_ID]]
+        else:
+            raise HomeAssistantError("boost requires zone_id or zone_ids")
+        loc_id = call.data.get(ATTR_LOCATION_ID)
+        targets = [_resolve_zone(hass, zid, loc_id) for zid in zone_ids]
+        temp = float(call.data[ATTR_TEMPERATURE])
+        until_dt = datetime.now(timezone.utc) + call.data[ATTR_DURATION]
+        for coord, zone in targets:
+            await coord.client.async_set_zone_heat_setpoint(
+                zone.zone_id,
+                setpoint_mode="TemporaryOverride",
+                heat_setpoint_value=temp,
+                time_until=_format_until(until_dt),
+            )
+        for coord in {c for c, _ in targets}:
+            await coord.async_request_refresh()
+
+    return _boost
+
+
+# ---- preset services ------------------------------------------------
+
+
+def _zones_in_scope(
+    hass: HomeAssistant,
+    zone_ids: list[str] | None,
+    location_id: str | None,
+) -> list[tuple[EvohomeDataUpdateCoordinator, ZoneData]]:
+    """Resolve a list of zones, defaulting to every zone (optionally filtered to a location)."""
+    if zone_ids:
+        return [_resolve_zone(hass, zid, location_id) for zid in zone_ids]
+    out: list[tuple[EvohomeDataUpdateCoordinator, ZoneData]] = []
+    for coord in _all_coordinators(hass):
+        for loc in coord.data.locations.values():
+            if location_id and loc.location_id != location_id:
+                continue
+            for zone in loc.zones.values():
+                out.append((coord, zone))
+    return out
+
+
+def _make_save_preset(hass: HomeAssistant, presets: PresetStore):
+    async def _save(call: ServiceCall) -> None:
+        targets = _zones_in_scope(
+            hass,
+            call.data.get(ATTR_ZONE_IDS),
+            call.data.get(ATTR_LOCATION_ID),
+        )
+        if not targets:
+            raise HomeAssistantError("No zones matched the requested scope")
+        # Always use a fresh GET so the preset captures the current truth
+        # rather than whatever the coordinator last polled.
+        snapshots: list[dict[str, Any]] = []
+        for coord, zone in targets:
+            sched = await coord.client.async_get_zone_schedule(zone.zone_id)
+            snapshots.append(
+                {
+                    "zone_id": zone.zone_id,
+                    "zone_name": zone.name,
+                    "location_id": zone.location_id,
+                    "schedule": sched,
+                }
+            )
+        await presets.save(call.data[ATTR_NAME], snapshots)
+
+    return _save
+
+
+def _make_apply_preset(hass: HomeAssistant, presets: PresetStore):
+    async def _apply(call: ServiceCall) -> None:
+        name = call.data[ATTR_NAME]
+        preset = await presets.get(name)
+        if preset is None:
+            raise HomeAssistantError(f"Unknown preset {name!r}")
+        wanted = call.data.get(ATTR_ZONE_IDS)
+        coords: set[EvohomeDataUpdateCoordinator] = set()
+        for entry in preset["zones"]:
+            zid = entry["zone_id"]
+            if wanted and zid not in wanted:
+                continue
+            try:
+                coord, zone = _resolve_zone(hass, zid, entry.get("location_id"))
+            except HomeAssistantError:
+                _LOGGER.warning(
+                    "Preset %s references unknown zone %s; skipping", name, zid
+                )
+                continue
+            await coord.client.async_set_zone_schedule(zone.zone_id, entry["schedule"])
+            coords.add(coord)
+        for coord in coords:
+            await coord.async_request_refresh()
+
+    return _apply
+
+
+def _make_list_presets(presets: PresetStore):
+    async def _list(_call: ServiceCall) -> ServiceResponse:
+        names = await presets.list_names()
+        out = []
+        for name in names:
+            p = await presets.get(name)
+            if p is None:
+                continue
+            out.append(
+                {
+                    "name": name,
+                    "created": p.get("created"),
+                    "zone_count": len(p.get("zones", [])),
+                }
+            )
+        return {"presets": out}
+
+    return _list
+
+
+def _make_delete_preset(presets: PresetStore):
+    async def _delete(call: ServiceCall) -> None:
+        name = call.data[ATTR_NAME]
+        if not await presets.delete(name):
+            raise HomeAssistantError(f"Unknown preset {name!r}")
+
+    return _delete
+
+
+# ---- export / import ------------------------------------------------
+
+
+def _make_export_schedules(hass: HomeAssistant):
+    async def _export(call: ServiceCall) -> ServiceResponse:
+        targets = _zones_in_scope(
+            hass,
+            call.data.get(ATTR_ZONE_IDS),
+            call.data.get(ATTR_LOCATION_ID),
+        )
+        if not targets:
+            raise HomeAssistantError("No zones matched the requested scope")
+        schedules: list[dict[str, Any]] = []
+        for coord, zone in targets:
+            sched = await coord.client.async_get_zone_schedule(zone.zone_id)
+            schedules.append(
+                {
+                    "zone_id": zone.zone_id,
+                    "zone_name": zone.name,
+                    "location_id": zone.location_id,
+                    "location_name": zone.location_name,
+                    "schedule": sched,
+                }
+            )
+        return {
+            "exported_at": datetime.now(timezone.utc).isoformat(),
+            "schedules": schedules,
+        }
+
+    return _export
+
+
+def _make_import_schedules(hass: HomeAssistant):
+    async def _import(call: ServiceCall) -> None:
+        coords: set[EvohomeDataUpdateCoordinator] = set()
+        for entry in call.data[ATTR_SCHEDULES]:
+            zid = str(entry.get("zone_id", "")).strip()
+            sched = entry.get("schedule")
+            if not zid or sched is None:
+                raise HomeAssistantError(
+                    "Each item in `schedules` requires zone_id and schedule"
+                )
+            try:
+                coord, zone = _resolve_zone(hass, zid, entry.get("location_id"))
+            except HomeAssistantError:
+                _LOGGER.warning("Import skipping unknown zone %s", zid)
+                continue
+            await coord.client.async_set_zone_schedule(
+                zone.zone_id, _normalize_schedule(sched)
+            )
+            coords.add(coord)
+        for coord in coords:
+            await coord.async_request_refresh()
+
+    return _import

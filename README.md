@@ -42,7 +42,28 @@ Working against the live API:
 4. *Settings -> Devices & Services -> Add Integration -> Evohome Control* and
    sign in with your Total Connect Comfort credentials.
 
+## Sync model
+
+The integration polls the API every `scan_interval` seconds (default 180,
+configurable in the integration's options). On each poll it re-fetches:
+
+  * **installation topology** (zone names, gateways, DHW), so renaming or
+    adding a zone in the Resideo app shows up in HA at the next interval -
+    no restart needed
+  * **location status** (live setpoints, current temperatures, system mode,
+    DHW state, **active faults / battery**)
+  * **the full weekly schedule** for every zone (and DHW)
+
+Service calls that patch part of a schedule (`apply_day_schedule`,
+`copy_zone_schedule`) always GET-modify-PUT against the live API, so they
+cannot clobber unrelated edits you made in the app on different days. After
+every write HA force-refreshes immediately rather than waiting for the next
+interval. Each climate entity exposes a `last_synced` attribute so you can
+sanity-check that polling is healthy.
+
 ## Services
+
+### Schedule management
 
 | Service | Description |
 |---|---|
@@ -50,9 +71,27 @@ Working against the live API:
 | `evohome_control.set_schedule` | Replaces the weekly schedule for a zone. |
 | `evohome_control.apply_day_schedule` | Replace one or more days' switchpoints across one or more zones in a single call. |
 | `evohome_control.copy_zone_schedule` | Copies the schedule from one zone onto another. |
-| `evohome_control.set_zone_temperature_until` | Override a zone's (or several zones') setpoint - permanent, for a duration, or until a time. |
+| `evohome_control.export_schedules` | Returns full schedules of every zone (or a subset) as a response - pipe to a file/notify for backups. |
+| `evohome_control.import_schedules` | Bulk-restore schedules (e.g. from a previous `export_schedules`). |
+
+### Schedule presets
+
+| Service | Description |
+|---|---|
+| `evohome_control.save_preset` | Snapshot the current weekly schedule of every zone (or a subset) under a name (e.g. `comfort`, `eco`, `holiday`). |
+| `evohome_control.apply_preset` | Restore a previously-saved preset. |
+| `evohome_control.list_presets` | Return the names + metadata of saved presets (response service). |
+| `evohome_control.delete_preset` | Remove a saved preset. |
+
+### Overrides & system mode
+
+| Service | Description |
+|---|---|
+| `evohome_control.set_zone_temperature_until` | Override one or more zones - permanent, for a duration, or until a time. |
 | `evohome_control.clear_zone_override` | Return a zone to FollowSchedule. |
+| `evohome_control.boost` | Sugar: temporary override at default 21°C for 1 hour. |
 | `evohome_control.set_system_mode` | Change the system mode of a location (optionally until a time). |
+| `evohome_control.away_until` | Sugar: set every (or one) location to Away mode until a specific time. |
 | `evohome_control.refresh_schedules` | Force-poll every location. |
 
 ## Bulk schedule editing

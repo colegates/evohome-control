@@ -162,6 +162,7 @@ class EvohomeZoneClimate(CoordinatorEntity[EvohomeDataUpdateCoordinator], Climat
         zone = self._zone
         if not zone:
             return {}
+        last = self.coordinator.data.last_updated
         return {
             "location_id": zone.location_id,
             "location_name": zone.location_name,
@@ -169,6 +170,11 @@ class EvohomeZoneClimate(CoordinatorEntity[EvohomeDataUpdateCoordinator], Climat
             "zone_id": zone.zone_id,
             "zone_type": zone.zone_type,
             "schedule": zone.schedule,
+            "is_overridden": (
+                zone.setpoint_mode is not None
+                and zone.setpoint_mode != "FollowSchedule"
+            ),
+            "last_synced": last.isoformat() if last else None,
         }
 
     # ---- commands -------------------------------------------------------
