@@ -31,11 +31,15 @@ import asyncio
 import base64
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 import aiohttp
 
 _LOGGER = logging.getLogger(__name__)
+
+TokenCache = dict[str, Any]
+TokenLoader = Callable[[], Awaitable[TokenCache | None]]
+TokenSaver = Callable[[TokenCache], Awaitable[None]]
 
 _HOST = "https://tccna.resideo.com"
 _TOKEN_URL = f"{_HOST}/Auth/OAuth/Token"
@@ -73,25 +77,74 @@ class EvohomeApiClient:
         username: str,
         password: str,
         session: aiohttp.ClientSession,
+        *,
+        token_loader: TokenLoader | None = None,
+        token_saver: TokenSaver | None = None,
     ) -> None:
         self._username = username
         self._password = password
         self._session = session
+        self._token_loader = token_loader
+        self._token_saver = token_saver
 
         self._access_token: str | None = None
         self._refresh_token: str | None = None
         self._token_expires: datetime = datetime.min.replace(tzinfo=timezone.utc)
         self._user_id: str | None = None
         self._lock = asyncio.Lock()
+        self._cache_loaded = False
 
     # ---- auth -----------------------------------------------------------
 
     async def async_login(self) -> None:
-        """Force an initial login so callers can fail fast on bad creds."""
-        await self._ensure_token(force=True)
+        """Bring up an authenticated session.
+
+        Reuses cached tokens if they are still valid - critical for not
+        triggering Resideo's auth rate limit (HTTP 429 attempt_limit_exceeded)
+        on every HA restart.
+        """
+        await self._load_cached_tokens()
+        await self._ensure_token()
         if self._user_id is None:
             account = await self._request("GET", "userAccount")
             self._user_id = str(account["userId"])
+
+    async def _load_cached_tokens(self) -> None:
+        if self._cache_loaded or self._token_loader is None:
+            self._cache_loaded = True
+            return
+        self._cache_loaded = True
+        try:
+            cached = await self._token_loader()
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("Token cache load failed - will reauthenticate")
+            return
+        if not cached:
+            return
+        try:
+            self._access_token = cached.get("access_token") or None
+            self._refresh_token = cached.get("refresh_token") or None
+            expires = cached.get("token_expires")
+            if expires:
+                self._token_expires = datetime.fromisoformat(expires)
+        except (TypeError, ValueError):
+            _LOGGER.warning("Cached token data malformed; ignoring")
+            self._access_token = None
+            self._refresh_token = None
+
+    async def _persist_tokens(self) -> None:
+        if self._token_saver is None or self._access_token is None:
+            return
+        try:
+            await self._token_saver(
+                {
+                    "access_token": self._access_token,
+                    "refresh_token": self._refresh_token,
+                    "token_expires": self._token_expires.isoformat(),
+                }
+            )
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("Persisting Evohome tokens failed - non-fatal")
 
     async def _ensure_token(self, *, force: bool = False) -> str:
         async with self._lock:
@@ -140,6 +193,11 @@ class EvohomeApiClient:
                 payload = await _safe_json(resp)
                 if resp.status >= 400:
                     msg = (payload or {}).get("error") or resp.reason or "auth failed"
+                    if resp.status == 429:
+                        raise EvohomeRateLimitError(
+                            f"Resideo auth rate-limit hit ({msg}); waiting "
+                            "before next attempt"
+                        )
                     if resp.status in (400, 401):
                         raise EvohomeAuthError(f"{resp.status}: {msg}")
                     raise EvohomeApiError(f"{resp.status}: {msg}")
@@ -154,6 +212,8 @@ class EvohomeApiClient:
             )
         except (KeyError, TypeError, ValueError) as err:
             raise EvohomeApiError(f"Malformed token response: {payload}") from err
+
+        await self._persist_tokens()
 
     # ---- core HTTP ------------------------------------------------------
 

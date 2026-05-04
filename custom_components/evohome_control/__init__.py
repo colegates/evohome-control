@@ -14,12 +14,21 @@ from datetime import timedelta
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_PASSWORD, CONF_SCAN_INTERVAL, CONF_USERNAME, Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.storage import Store
 
-from .api import EvohomeApiClient, EvohomeAuthError
+from .api import (
+    EvohomeApiClient,
+    EvohomeApiError,
+    EvohomeAuthError,
+    EvohomeRateLimitError,
+)
 from .const import DEFAULT_SCAN_INTERVAL, DOMAIN
 from .coordinator import EvohomeDataUpdateCoordinator
 from .services import async_register_services, async_unregister_services
+
+_TOKEN_STORE_VERSION = 1
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -36,17 +45,46 @@ PLATFORMS: list[Platform] = [
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Evohome Control from a config entry."""
     session = async_get_clientsession(hass)
+
+    # Persist auth tokens between restarts so we don't trigger the Resideo
+    # auth rate-limit (HTTP 429 attempt_limit_exceeded) every time HA reloads.
+    token_store: Store[dict] = Store(
+        hass,
+        _TOKEN_STORE_VERSION,
+        f"evohome_control_tokens_{entry.entry_id}",
+        private=True,
+    )
+
+    async def _load_tokens() -> dict | None:
+        return await token_store.async_load()
+
+    async def _save_tokens(tokens: dict) -> None:
+        await token_store.async_save(tokens)
+
     client = EvohomeApiClient(
         username=entry.data[CONF_USERNAME],
         password=entry.data[CONF_PASSWORD],
         session=session,
+        token_loader=_load_tokens,
+        token_saver=_save_tokens,
     )
 
     try:
         await client.async_login()
     except EvohomeAuthError as err:
         _LOGGER.error("Authentication with Evohome/Resideo failed: %s", err)
-        return False
+        raise ConfigEntryAuthFailed(str(err)) from err
+    except EvohomeRateLimitError as err:
+        _LOGGER.warning(
+            "Resideo auth rate-limited - HA will retry automatically in a "
+            "few minutes (%s)",
+            err,
+        )
+        raise ConfigEntryNotReady(
+            "Resideo auth rate-limited (HTTP 429). Will retry shortly."
+        ) from err
+    except EvohomeApiError as err:
+        raise ConfigEntryNotReady(f"Cannot reach Resideo: {err}") from err
 
     scan_interval = timedelta(
         seconds=entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)

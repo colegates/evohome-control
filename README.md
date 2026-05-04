@@ -42,6 +42,22 @@ Working against the live API:
 4. *Settings -> Devices & Services -> Add Integration -> Evohome Control* and
    sign in with your Total Connect Comfort credentials.
 
+## A note on the Resideo auth rate limit
+
+The Resideo TCC token endpoint rate-limits **password** logins (it returns
+``HTTP 429 attempt_limit_exceeded``) when too many fresh logins arrive in a
+short window. The integration mitigates this in two ways:
+
+  * Access + refresh tokens are persisted to ``<config>/.storage/`` and
+    reused across HA restarts, so reloads don't re-authenticate.
+  * If the rate limit does hit (e.g. on first install while another client
+    is also logging in), HA marks the entry "not ready" and retries
+    automatically with backoff - no manual intervention needed.
+
+If you also have the official ``evohome`` integration loaded against the
+**same Resideo account**, both clients will compete for fresh logins.
+Disabling one is recommended.
+
 ## Sync model
 
 The integration polls the API every `scan_interval` seconds (default 180,
