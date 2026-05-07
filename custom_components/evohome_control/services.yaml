@@ -367,6 +367,76 @@ import_schedules:
       selector:
         object:
 
+dhw_boost:
+  name: Boost hot water
+  description: >-
+    Temporarily override the domestic hot-water cylinder state for a given
+    duration (or until a specific time). Defaults to On for 1 hour when neither
+    duration nor until is supplied. Appears in the Honeywell / evohome app as
+    "Boost until HH:MM".
+  fields:
+    dhw_id:
+      name: DHW ID
+      description: The Resideo TCC domestic hot-water identifier (visible as dhw_id in the water_heater entity attributes).
+      required: true
+      example: "3932871"
+      selector:
+        text:
+    duration:
+      name: Duration
+      description: How long the boost should last (mutually exclusive with `until`). Defaults to 1 hour.
+      required: false
+      example: "01:00:00"
+      selector:
+        duration:
+    until:
+      name: Until
+      description: Absolute time the boost should end (mutually exclusive with `duration`).
+      required: false
+      example: "2026-01-01 22:00:00"
+      selector:
+        datetime:
+    state:
+      name: State
+      description: Whether to force the cylinder On or Off during the boost period.
+      required: false
+      default: "On"
+      example: "On"
+      selector:
+        select:
+          options:
+            - "On"
+            - "Off"
+    location_id:
+      name: Location ID
+      description: Required only when the same dhw_id appears in more than one location.
+      required: false
+      example: "1706229"
+      selector:
+        text:
+
+dhw_clear_override:
+  name: Clear hot-water override
+  description: >-
+    Cancel any active DHW override and return the cylinder to its normal
+    schedule (FollowSchedule). Equivalent to setting the water heater operation
+    mode to auto, but callable without knowing the entity_id.
+  fields:
+    dhw_id:
+      name: DHW ID
+      description: The Resideo TCC domestic hot-water identifier.
+      required: true
+      example: "3932871"
+      selector:
+        text:
+    location_id:
+      name: Location ID
+      description: Required only when the same dhw_id appears in more than one location.
+      required: false
+      example: "1706229"
+      selector:
+        text:
+
 set_system_mode:
   name: Set system mode
   description: >-

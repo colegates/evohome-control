@@ -21,6 +21,7 @@ from .const import (
     ATTR_DAILY_SCHEDULES,
     ATTR_DAY_OF_WEEK,
     ATTR_DAYS_OF_WEEK,
+    ATTR_DHW_ID,
     ATTR_DURATION,
     ATTR_FROM_ZONE_ID,
     ATTR_HEAT_SETPOINT,
@@ -30,6 +31,7 @@ from .const import (
     ATTR_PRESET_NAME,
     ATTR_SCHEDULE,
     ATTR_SCHEDULES,
+    ATTR_STATE,
     ATTR_SWITCHPOINTS,
     ATTR_SYSTEM_MODE,
     ATTR_TEMPERATURE,
@@ -47,6 +49,8 @@ from .const import (
     SERVICE_CLEAR_ZONE_OVERRIDE,
     SERVICE_COPY_SCHEDULE,
     SERVICE_DELETE_PRESET,
+    SERVICE_DHW_BOOST,
+    SERVICE_DHW_CLEAR_OVERRIDE,
     SERVICE_EXPORT_SCHEDULES,
     SERVICE_GET_SCHEDULE,
     SERVICE_IMPORT_SCHEDULES,
@@ -57,7 +61,7 @@ from .const import (
     SERVICE_SET_SYSTEM_MODE,
     SERVICE_SET_ZONE_OVERRIDE,
 )
-from .coordinator import EvohomeDataUpdateCoordinator, LocationData, ZoneData
+from .coordinator import DhwData, EvohomeDataUpdateCoordinator, LocationData, ZoneData
 from .presets import PresetStore
 
 _LOGGER = logging.getLogger(__name__)
@@ -218,6 +222,21 @@ _IMPORT_SCHEMA = vol.Schema(
         vol.Required(ATTR_SCHEDULES): vol.All(cv.ensure_list, [dict]),
     }
 )
+_DHW_BOOST_SCHEMA = vol.Schema(
+    {
+        vol.Required(ATTR_DHW_ID): cv.string,
+        vol.Exclusive(ATTR_DURATION, "until"): cv.time_period,
+        vol.Exclusive(ATTR_UNTIL, "until"): cv.datetime,
+        vol.Optional(ATTR_STATE, default="On"): vol.In(["On", "Off"]),
+        vol.Optional(ATTR_LOCATION_ID): cv.string,
+    }
+)
+_DHW_CLEAR_SCHEMA = vol.Schema(
+    {
+        vol.Required(ATTR_DHW_ID): cv.string,
+        vol.Optional(ATTR_LOCATION_ID): cv.string,
+    }
+)
 
 
 def async_register_services(hass: HomeAssistant) -> None:
@@ -323,6 +342,18 @@ def async_register_services(hass: HomeAssistant) -> None:
         _make_import_schedules(hass),
         schema=_IMPORT_SCHEMA,
     )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_DHW_BOOST,
+        _make_dhw_boost(hass),
+        schema=_DHW_BOOST_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_DHW_CLEAR_OVERRIDE,
+        _make_dhw_clear_override(hass),
+        schema=_DHW_CLEAR_SCHEMA,
+    )
 
 
 def async_unregister_services(hass: HomeAssistant) -> None:
@@ -343,6 +374,8 @@ def async_unregister_services(hass: HomeAssistant) -> None:
         SERVICE_DELETE_PRESET,
         SERVICE_EXPORT_SCHEDULES,
         SERVICE_IMPORT_SCHEDULES,
+        SERVICE_DHW_BOOST,
+        SERVICE_DHW_CLEAR_OVERRIDE,
     ):
         hass.services.async_remove(DOMAIN, svc)
 
@@ -675,6 +708,65 @@ def _make_boost(hass: HomeAssistant):
             await coord.async_request_refresh()
 
     return _boost
+
+
+# ---- DHW services ---------------------------------------------------
+
+
+def _resolve_dhw(
+    hass: HomeAssistant, dhw_id: str, location_id: str | None
+) -> tuple[EvohomeDataUpdateCoordinator, DhwData]:
+    matches: list[tuple[EvohomeDataUpdateCoordinator, DhwData]] = []
+    for coord in _all_coordinators(hass):
+        for loc in coord.data.locations.values():
+            if location_id and loc.location_id != location_id:
+                continue
+            if loc.dhw is not None and loc.dhw.dhw_id == dhw_id:
+                matches.append((coord, loc.dhw))
+    if not matches:
+        raise HomeAssistantError(f"Unknown evohome dhw_id: {dhw_id}")
+    if len(matches) > 1:
+        raise HomeAssistantError(
+            f"Ambiguous dhw_id {dhw_id} - specify location_id"
+        )
+    return matches[0]
+
+
+def _make_dhw_boost(hass: HomeAssistant):
+    async def _dhw_boost(call: ServiceCall) -> None:
+        coord, dhw = _resolve_dhw(
+            hass, call.data[ATTR_DHW_ID], call.data.get(ATTR_LOCATION_ID)
+        )
+        state = call.data.get(ATTR_STATE, "On")
+        if ATTR_UNTIL in call.data:
+            until_dt = call.data[ATTR_UNTIL]
+        elif ATTR_DURATION in call.data:
+            until_dt = datetime.now(timezone.utc) + call.data[ATTR_DURATION]
+        else:
+            until_dt = datetime.now(timezone.utc) + timedelta(hours=1)
+        await coord.client.async_set_dhw_state(
+            dhw.dhw_id,
+            mode="TemporaryOverride",
+            state=state,
+            time_until=_format_until(until_dt),
+        )
+        await coord.async_request_refresh()
+
+    return _dhw_boost
+
+
+def _make_dhw_clear_override(hass: HomeAssistant):
+    async def _dhw_clear(call: ServiceCall) -> None:
+        coord, dhw = _resolve_dhw(
+            hass, call.data[ATTR_DHW_ID], call.data.get(ATTR_LOCATION_ID)
+        )
+        await coord.client.async_set_dhw_state(
+            dhw.dhw_id,
+            mode="FollowSchedule",
+        )
+        await coord.async_request_refresh()
+
+    return _dhw_clear
 
 
 # ---- preset services ------------------------------------------------
