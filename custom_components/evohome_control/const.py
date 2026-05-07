@@ -38,6 +38,8 @@ SERVICE_LIST_PRESETS: Final = "list_presets"
 SERVICE_DELETE_PRESET: Final = "delete_preset"
 SERVICE_EXPORT_SCHEDULES: Final = "export_schedules"
 SERVICE_IMPORT_SCHEDULES: Final = "import_schedules"
+SERVICE_DHW_BOOST: Final = "dhw_boost"
+SERVICE_DHW_CLEAR_OVERRIDE: Final = "dhw_clear_override"
 
 # Storage keys.
 STORAGE_VERSION: Final = 1
@@ -64,3 +66,5 @@ ATTR_PERMANENT: Final = "permanent"
 ATTR_NAME: Final = "name"
 ATTR_PRESET_NAME: Final = "preset_name"
 ATTR_SCHEDULES: Final = "schedules"
+ATTR_DHW_ID: Final = "dhw_id"
+ATTR_STATE: Final = "state"
