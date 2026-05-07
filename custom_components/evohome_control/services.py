@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, NamedTuple
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import voluptuous as vol
 
@@ -732,6 +733,118 @@ def _resolve_dhw(
     return matches[0]
 
 
+class _DhwScheduledState(NamedTuple):
+    state: str       # "On" | "Off"
+    next_change: datetime  # tz-aware datetime of the next scheduled switchpoint
+
+
+def _dhw_schedule_state_now(
+    coord: EvohomeDataUpdateCoordinator,
+    dhw: DhwData,
+) -> _DhwScheduledState | None:
+    """Return the current scheduled DHW state and when it next changes.
+
+    Reads the cached weekly programme, locates the most recent switchpoint
+    at-or-before now (in the location's timezone), and returns both that
+    state and the absolute datetime of the following switchpoint.
+    Returns None when the schedule is absent or entirely empty.
+    """
+    loc = coord.data.locations.get(dhw.location_id)
+    tz_id = loc.time_zone if loc is not None else None
+    try:
+        tz: Any = ZoneInfo(tz_id) if tz_id else timezone.utc
+    except (ZoneInfoNotFoundError, KeyError):
+        tz = timezone.utc
+
+    now = datetime.now(tz)
+
+    schedule = dhw.schedule
+    if not schedule:
+        return None
+
+    daily_schedules = schedule.get("dailySchedules", [])
+    if not daily_schedules:
+        return None
+
+    # Build day_name -> sorted [(HH:MM:SS, state), ...]; skip days with no
+    # valid switchpoints so the fallback logic handles sparse schedules.
+    day_sps: dict[str, list[tuple[str, str]]] = {}
+    for day_sched in daily_schedules:
+        dow = day_sched.get("dayOfWeek")
+        if not dow:
+            continue
+        sps: list[tuple[str, str]] = []
+        for sp in day_sched.get("switchpoints", []):
+            tod = sp.get("timeOfDay", "")
+            sp_state = sp.get("state", "")
+            if not tod or not sp_state:
+                continue
+            parts = tod.split(":")
+            if len(parts) == 2:
+                tod = f"{tod}:00"
+            elif len(parts) != 3:
+                continue
+            sps.append((tod, sp_state))
+        if sps:
+            day_sps[dow] = sorted(sps)
+
+    if not day_sps:
+        return None
+
+    today_idx = now.weekday()  # 0 = Monday, matches DAYS_OF_WEEK index
+    today_name = DAYS_OF_WEEK[today_idx]
+    now_str = now.strftime("%H:%M:%S")
+
+    # --- current state: last switchpoint at-or-before now today, else the
+    #     last switchpoint of the most recent prior day with any entries. ---
+    today_sps = day_sps.get(today_name, [])
+    before_now = [(t, s) for t, s in today_sps if t <= now_str]
+
+    current_state: str | None = None
+    if before_now:
+        _, current_state = before_now[-1]
+    else:
+        for i in range(1, 8):
+            prev_name = DAYS_OF_WEEK[(today_idx - i) % 7]
+            if day_sps.get(prev_name):
+                _, current_state = day_sps[prev_name][-1]
+                break
+
+    if current_state is None:
+        return None
+
+    # --- next change: first switchpoint strictly after now today, or the
+    #     first one of the next day (wrapping up to 7 days forward). ---
+    after_now = [(t, s) for t, s in today_sps if t > now_str]
+
+    next_change: datetime | None = None
+    if after_now:
+        p = after_now[0][0].split(":")
+        next_change = datetime(
+            now.year, now.month, now.day,
+            int(p[0]), int(p[1]), int(p[2]),
+            tzinfo=tz,
+        )
+    else:
+        for i in range(1, 8):
+            next_name = DAYS_OF_WEEK[(today_idx + i) % 7]
+            next_sps = day_sps.get(next_name, [])
+            if next_sps:
+                p = next_sps[0][0].split(":")
+                next_date = now.date() + timedelta(days=i)
+                next_change = datetime(
+                    next_date.year, next_date.month, next_date.day,
+                    int(p[0]), int(p[1]), int(p[2]),
+                    tzinfo=tz,
+                )
+                break
+
+    if next_change is None:
+        return None
+
+    return _DhwScheduledState(state=current_state, next_change=next_change)
+
+
 def _make_dhw_boost(hass: HomeAssistant):
     async def _dhw_boost(call: ServiceCall) -> None:
         coord, dhw = _resolve_dhw(
@@ -760,10 +873,19 @@ def _make_dhw_clear_override(hass: HomeAssistant):
         coord, dhw = _resolve_dhw(
             hass, call.data[ATTR_DHW_ID], call.data.get(ATTR_LOCATION_ID)
         )
-        await coord.client.async_set_dhw_state(
-            dhw.dhw_id,
-            mode="FollowSchedule",
-        )
+        scheduled = _dhw_schedule_state_now(coord, dhw)
+        if scheduled is not None and scheduled.state == "Off":
+            await coord.client.async_set_dhw_state(
+                dhw.dhw_id,
+                mode="TemporaryOverride",
+                state="Off",
+                time_until=_format_until(scheduled.next_change),
+            )
+        else:
+            await coord.client.async_set_dhw_state(
+                dhw.dhw_id,
+                mode="FollowSchedule",
+            )
         await coord.async_request_refresh()
 
     return _dhw_clear
