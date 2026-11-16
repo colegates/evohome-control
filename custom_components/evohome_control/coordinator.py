@@ -33,12 +33,14 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from typing import Any
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
 
+from . import timing
 from .api import EvohomeApiClient, EvohomeApiError, EvohomeAuthError
 from .const import DOMAIN
 
@@ -89,7 +91,8 @@ class LocationData:
     name: str
     city: str | None
     country: str | None
-    time_zone: str | None
+    time_zone: str | None  # raw Resideo id (often a Windows name)
+    tz: tzinfo | None = None  # resolved ZoneInfo (set by coordinator setup)
     tcs_ids: list[str] = field(default_factory=list)
     primary_tcs_id: str | None = None
     system_mode: str | None = None
@@ -161,14 +164,35 @@ class EvohomeDataUpdateCoordinator(DataUpdateCoordinator[EvohomeData]):
                     else None
                 ),
             )
+            default_tz = dt_util.get_default_time_zone()
+            # Resolve each unique Resideo timezone id once per cycle, off the
+            # event loop. Resideo returns Windows-style names (e.g.
+            # "GMTStandardTime") which timing.async_resolve_tz translates to
+            # IANA; the sync helper underneath is lru-cached so this is a
+            # no-op after the first warm-up.
+            unique_tz_ids: set[str | None] = {
+                (lc.get("locationInfo") or {}).get("timeZone", {}).get("timeZoneId")
+                for lc in self._installation
+            }
+            tz_by_id: dict[str | None, tzinfo] = {}
+            for tz_id in unique_tz_ids:
+                tz_by_id[tz_id] = await timing.async_resolve_tz(
+                    self.hass,
+                    tz_id,
+                    default=default_tz,
+                    source=f"location timeZoneId={tz_id!r}",
+                )
+
             for loc_cfg in self._installation:
                 info = loc_cfg["locationInfo"]
+                raw_tz_id = (info.get("timeZone") or {}).get("timeZoneId")
                 loc = LocationData(
                     location_id=str(info["locationId"]),
                     name=info.get("name") or f"Location {info['locationId']}",
                     city=info.get("city"),
                     country=info.get("country"),
-                    time_zone=(info.get("timeZone") or {}).get("timeZoneId"),
+                    time_zone=raw_tz_id,
+                    tz=tz_by_id.get(raw_tz_id, default_tz),
                 )
                 # Walk gateways/TCSs to populate zones from the static config.
                 for gw in loc_cfg.get("gateways", []):

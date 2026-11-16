@@ -191,8 +191,12 @@ class EvohomeZoneClimate(CoordinatorEntity[EvohomeDataUpdateCoordinator], Climat
         when the schedule is unavailable or has no switchpoints.
         """
         loc = self.coordinator.data.locations.get(zone.location_id)
-        tz_id = loc.time_zone if loc is not None else None
-        nxt = timing.zone_next_switchpoint(zone.schedule, tz_id=tz_id)
+        # LocationData.tz is pre-resolved by the coordinator off the event
+        # loop; .time_zone is kept as a fallback for unit-test paths that
+        # don't populate .tz.
+        tz = loc.tz if loc is not None else None
+        tz_id = loc.time_zone if (loc is not None and tz is None) else None
+        nxt = timing.zone_next_switchpoint(zone.schedule, tz=tz, tz_id=tz_id)
         if nxt is not None:
             return nxt
         return datetime.now(timezone.utc) + _ONE_HOUR
