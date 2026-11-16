@@ -10,13 +10,14 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, NamedTuple
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import voluptuous as vol
 
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
+
+from . import audit, timing
 
 from .const import (
     ATTR_DAILY_SCHEDULES,
@@ -473,6 +474,15 @@ def _make_set_schedule(hass: HomeAssistant):
         )
         body = _normalize_schedule(call.data[ATTR_SCHEDULE])
         await coord.client.async_set_zone_schedule(zone.zone_id, body)
+        await audit.log_write(
+            _LOGGER,
+            hass,
+            call.context,
+            action="set_schedule",
+            zone_name=zone.name,
+            zone_id=zone.zone_id,
+            location_id=zone.location_id,
+        )
         await coord.async_request_refresh()
 
     return _set
@@ -495,11 +505,7 @@ def _resolve_location(
     raise HomeAssistantError(f"Unknown evohome location_id: {location_id}")
 
 
-def _format_until(value: datetime) -> str:
-    """Format a datetime as the API-expected ISO 8601 string in UTC."""
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+_format_until = timing.format_until  # re-exported for backwards-compat
 
 
 def _make_copy_schedule(hass: HomeAssistant):
@@ -513,6 +519,16 @@ def _make_copy_schedule(hass: HomeAssistant):
             )
         sched = await coord.client.async_get_zone_schedule(src.zone_id)
         await coord.client.async_set_zone_schedule(dst.zone_id, sched)
+        await audit.log_write(
+            _LOGGER,
+            hass,
+            call.context,
+            action="copy_zone_schedule",
+            zone_name=dst.name,
+            zone_id=dst.zone_id,
+            location_id=dst.location_id,
+            extra={"from_zone_id": src.zone_id, "from_zone": src.name},
+        )
         await coord.async_request_refresh()
 
     return _copy
@@ -545,12 +561,35 @@ def _make_set_override(hass: HomeAssistant):
                     setpoint_mode="PermanentOverride",
                     heat_setpoint_value=temp,
                 )
+                await audit.log_write(
+                    _LOGGER,
+                    hass,
+                    call.context,
+                    action="set_zone_temperature_until",
+                    zone_name=zone.name,
+                    zone_id=zone.zone_id,
+                    location_id=zone.location_id,
+                    setpoint_mode="PermanentOverride",
+                    temperature=temp,
+                )
             else:
                 await coord.client.async_set_zone_heat_setpoint(
                     zone.zone_id,
                     setpoint_mode="TemporaryOverride",
                     heat_setpoint_value=temp,
                     time_until=_format_until(until_dt),
+                )
+                await audit.log_write(
+                    _LOGGER,
+                    hass,
+                    call.context,
+                    action="set_zone_temperature_until",
+                    zone_name=zone.name,
+                    zone_id=zone.zone_id,
+                    location_id=zone.location_id,
+                    setpoint_mode="TemporaryOverride",
+                    temperature=temp,
+                    until=until_dt,
                 )
 
         for coord in {c for c, _ in targets}:
@@ -609,6 +648,16 @@ def _make_apply_day_schedule(hass: HomeAssistant):
             await coord.client.async_set_zone_schedule(
                 zone.zone_id, {"dailySchedules": updated_days}
             )
+            await audit.log_write(
+                _LOGGER,
+                hass,
+                call.context,
+                action="apply_day_schedule",
+                zone_name=zone.name,
+                zone_id=zone.zone_id,
+                location_id=zone.location_id,
+                extra={"days": ",".join(days)},
+            )
 
         for coord in {c for c, _ in targets}:
             await coord.async_request_refresh()
@@ -623,6 +672,16 @@ def _make_clear_override(hass: HomeAssistant):
         )
         await coord.client.async_set_zone_heat_setpoint(
             zone.zone_id, setpoint_mode="FollowSchedule"
+        )
+        await audit.log_write(
+            _LOGGER,
+            hass,
+            call.context,
+            action="clear_zone_override",
+            zone_name=zone.name,
+            zone_id=zone.zone_id,
+            location_id=zone.location_id,
+            setpoint_mode="FollowSchedule",
         )
         await coord.async_request_refresh()
 
@@ -648,6 +707,18 @@ def _make_set_system_mode(hass: HomeAssistant):
             system_mode=mode,
             permanent=permanent,
             time_until=_format_until(until_dt) if until_dt else None,
+        )
+        await audit.log_write(
+            _LOGGER,
+            hass,
+            call.context,
+            action="set_system_mode",
+            location_id=loc.location_id,
+            location_name=loc.name,
+            tcs_id=loc.primary_tcs_id,
+            system_mode=mode,
+            until=until_dt,
+            extra={"permanent": permanent},
         )
         await coord.async_request_refresh()
 
@@ -679,6 +750,17 @@ def _make_away_until(hass: HomeAssistant):
                 permanent=False,
                 time_until=_format_until(until_dt),
             )
+            await audit.log_write(
+                _LOGGER,
+                hass,
+                call.context,
+                action="away_until",
+                location_id=loc.location_id,
+                location_name=loc.name,
+                tcs_id=loc.primary_tcs_id,
+                system_mode="Away",
+                until=until_dt,
+            )
         for coord in {c for c, _ in targets}:
             await coord.async_request_refresh()
 
@@ -704,6 +786,18 @@ def _make_boost(hass: HomeAssistant):
                 setpoint_mode="TemporaryOverride",
                 heat_setpoint_value=temp,
                 time_until=_format_until(until_dt),
+            )
+            await audit.log_write(
+                _LOGGER,
+                hass,
+                call.context,
+                action="boost",
+                zone_name=zone.name,
+                zone_id=zone.zone_id,
+                location_id=zone.location_id,
+                setpoint_mode="TemporaryOverride",
+                temperature=temp,
+                until=until_dt,
             )
         for coord in {c for c, _ in targets}:
             await coord.async_request_refresh()
@@ -741,108 +835,33 @@ class _DhwScheduledState(NamedTuple):
 def _dhw_schedule_state_now(
     coord: EvohomeDataUpdateCoordinator,
     dhw: DhwData,
+    *,
+    now: datetime | None = None,
 ) -> _DhwScheduledState | None:
     """Return the current scheduled DHW state and when it next changes.
 
-    Reads the cached weekly programme, locates the most recent switchpoint
-    at-or-before now (in the location's timezone), and returns both that
-    state and the absolute datetime of the following switchpoint.
-    Returns None when the schedule is absent or entirely empty.
+    Thin wrapper over :func:`timing.dhw_schedule_state_now` that resolves the
+    location's timezone from the coordinator and preserves the DHW-specific
+    return tuple. ``now`` is injectable for tests.
     """
     loc = coord.data.locations.get(dhw.location_id)
     tz_id = loc.time_zone if loc is not None else None
-    try:
-        tz: Any = ZoneInfo(tz_id) if tz_id else timezone.utc
-    except (ZoneInfoNotFoundError, KeyError):
-        tz = timezone.utc
-
-    now = datetime.now(tz)
-
-    schedule = dhw.schedule
-    if not schedule:
+    state = timing.dhw_schedule_state_now(dhw.schedule, tz_id=tz_id, now=now)
+    if state is None:
         return None
+    return _DhwScheduledState(state=state.value, next_change=state.next_change)
 
-    daily_schedules = schedule.get("dailySchedules", [])
-    if not daily_schedules:
-        return None
 
-    # Build day_name -> sorted [(HH:MM:SS, state), ...]; skip days with no
-    # valid switchpoints so the fallback logic handles sparse schedules.
-    day_sps: dict[str, list[tuple[str, str]]] = {}
-    for day_sched in daily_schedules:
-        dow = day_sched.get("dayOfWeek")
-        if not dow:
-            continue
-        sps: list[tuple[str, str]] = []
-        for sp in day_sched.get("switchpoints", []):
-            tod = sp.get("timeOfDay", "")
-            sp_state = sp.get("state", "")
-            if not tod or not sp_state:
-                continue
-            parts = tod.split(":")
-            if len(parts) == 2:
-                tod = f"{tod}:00"
-            elif len(parts) != 3:
-                continue
-            sps.append((tod, sp_state))
-        if sps:
-            day_sps[dow] = sorted(sps)
-
-    if not day_sps:
-        return None
-
-    today_idx = now.weekday()  # 0 = Monday, matches DAYS_OF_WEEK index
-    today_name = DAYS_OF_WEEK[today_idx]
-    now_str = now.strftime("%H:%M:%S")
-
-    # --- current state: last switchpoint at-or-before now today, else the
-    #     last switchpoint of the most recent prior day with any entries. ---
-    today_sps = day_sps.get(today_name, [])
-    before_now = [(t, s) for t, s in today_sps if t <= now_str]
-
-    current_state: str | None = None
-    if before_now:
-        _, current_state = before_now[-1]
-    else:
-        for i in range(1, 8):
-            prev_name = DAYS_OF_WEEK[(today_idx - i) % 7]
-            if day_sps.get(prev_name):
-                _, current_state = day_sps[prev_name][-1]
-                break
-
-    if current_state is None:
-        return None
-
-    # --- next change: first switchpoint strictly after now today, or the
-    #     first one of the next day (wrapping up to 7 days forward). ---
-    after_now = [(t, s) for t, s in today_sps if t > now_str]
-
-    next_change: datetime | None = None
-    if after_now:
-        p = after_now[0][0].split(":")
-        next_change = datetime(
-            now.year, now.month, now.day,
-            int(p[0]), int(p[1]), int(p[2]),
-            tzinfo=tz,
-        )
-    else:
-        for i in range(1, 8):
-            next_name = DAYS_OF_WEEK[(today_idx + i) % 7]
-            next_sps = day_sps.get(next_name, [])
-            if next_sps:
-                p = next_sps[0][0].split(":")
-                next_date = now.date() + timedelta(days=i)
-                next_change = datetime(
-                    next_date.year, next_date.month, next_date.day,
-                    int(p[0]), int(p[1]), int(p[2]),
-                    tzinfo=tz,
-                )
-                break
-
-    if next_change is None:
-        return None
-
-    return _DhwScheduledState(state=current_state, next_change=next_change)
+def _zone_schedule_next_change(
+    coord: EvohomeDataUpdateCoordinator,
+    zone: ZoneData,
+    *,
+    now: datetime | None = None,
+) -> datetime | None:
+    """Return the datetime of the zone's next scheduled switchpoint, or None."""
+    loc = coord.data.locations.get(zone.location_id)
+    tz_id = loc.time_zone if loc is not None else None
+    return timing.zone_next_switchpoint(zone.schedule, tz_id=tz_id, now=now)
 
 
 def _make_dhw_boost(hass: HomeAssistant):
@@ -863,6 +882,17 @@ def _make_dhw_boost(hass: HomeAssistant):
             state=state,
             time_until=_format_until(until_dt),
         )
+        await audit.log_write(
+            _LOGGER,
+            hass,
+            call.context,
+            action="dhw_boost",
+            dhw_id=dhw.dhw_id,
+            location_id=dhw.location_id,
+            setpoint_mode="TemporaryOverride",
+            dhw_state=state,
+            until=until_dt,
+        )
         await coord.async_request_refresh()
 
     return _dhw_boost
@@ -881,10 +911,30 @@ def _make_dhw_clear_override(hass: HomeAssistant):
                 state="Off",
                 time_until=_format_until(scheduled.next_change),
             )
+            await audit.log_write(
+                _LOGGER,
+                hass,
+                call.context,
+                action="dhw_clear_override",
+                dhw_id=dhw.dhw_id,
+                location_id=dhw.location_id,
+                setpoint_mode="TemporaryOverride",
+                dhw_state="Off",
+                until=scheduled.next_change,
+            )
         else:
             await coord.client.async_set_dhw_state(
                 dhw.dhw_id,
                 mode="FollowSchedule",
+            )
+            await audit.log_write(
+                _LOGGER,
+                hass,
+                call.context,
+                action="dhw_clear_override",
+                dhw_id=dhw.dhw_id,
+                location_id=dhw.location_id,
+                setpoint_mode="FollowSchedule",
             )
         await coord.async_request_refresh()
 
@@ -959,6 +1009,16 @@ def _make_apply_preset(hass: HomeAssistant, presets: PresetStore):
                 )
                 continue
             await coord.client.async_set_zone_schedule(zone.zone_id, entry["schedule"])
+            await audit.log_write(
+                _LOGGER,
+                hass,
+                call.context,
+                action="apply_preset",
+                zone_name=zone.name,
+                zone_id=zone.zone_id,
+                location_id=zone.location_id,
+                extra={"preset": name},
+            )
             coords.add(coord)
         for coord in coords:
             await coord.async_request_refresh()
@@ -1044,6 +1104,15 @@ def _make_import_schedules(hass: HomeAssistant):
                 continue
             await coord.client.async_set_zone_schedule(
                 zone.zone_id, _normalize_schedule(sched)
+            )
+            await audit.log_write(
+                _LOGGER,
+                hass,
+                call.context,
+                action="import_schedules",
+                zone_name=zone.name,
+                zone_id=zone.zone_id,
+                location_id=zone.location_id,
             )
             coords.add(coord)
         for coord in coords:
