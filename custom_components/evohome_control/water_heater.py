@@ -19,6 +19,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+from . import audit
 from .const import DOMAIN, MANUFACTURER
 from .coordinator import DhwData, EvohomeDataUpdateCoordinator
 
@@ -123,18 +124,26 @@ class EvohomeDhwEntity(
 
     async def async_set_operation_mode(self, operation_mode: str) -> None:
         if operation_mode == _OP_AUTO:
-            await self.coordinator.client.async_set_dhw_state(
-                self._dhw_id, mode="FollowSchedule"
-            )
+            mode, state = "FollowSchedule", None
         elif operation_mode == _OP_ON:
-            await self.coordinator.client.async_set_dhw_state(
-                self._dhw_id, mode="PermanentOverride", state="On"
-            )
+            mode, state = "PermanentOverride", "On"
         elif operation_mode == _OP_OFF:
-            await self.coordinator.client.async_set_dhw_state(
-                self._dhw_id, mode="PermanentOverride", state="Off"
-            )
+            mode, state = "PermanentOverride", "Off"
         else:
             _LOGGER.warning("Unknown DHW operation mode: %s", operation_mode)
             return
+        await self.coordinator.client.async_set_dhw_state(
+            self._dhw_id, mode=mode, state=state
+        )
+        dhw = self._dhw
+        await audit.log_write(
+            _LOGGER,
+            self.hass,
+            self._context,
+            action="water_heater.set_operation_mode",
+            dhw_id=self._dhw_id,
+            location_id=dhw.location_id if dhw else None,
+            setpoint_mode=mode,
+            dhw_state=state,
+        )
         await self.coordinator.async_request_refresh()

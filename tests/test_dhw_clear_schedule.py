@@ -120,9 +120,14 @@ def _call(data: dict):
 
 
 def _patch_now(fixed: datetime):
-    """Context manager that patches datetime.now in services and forwards datetime()."""
+    """Patch datetime.now in the shared timing module.
+
+    Used by the handler tests (7-9) which call _dhw_schedule_state_now via the
+    real service handler, without a `now=` hook. The direct helper tests (1-6)
+    inject `now=` instead of patching.
+    """
     return patch(
-        "custom_components.evohome_control.services.datetime",
+        "custom_components.evohome_control.timing.datetime",
         **{
             "now.return_value": fixed,
             "side_effect": lambda *a, **kw: dt_module.datetime(*a, **kw),
@@ -138,8 +143,7 @@ def _patch_now(fixed: datetime):
 def test_mid_day_off_period():
     """14:30 Thursday falls between the 12:00 Off and 18:00 On switchpoints."""
     coord, dhw = _make_coord(FULL_SCHEDULE)
-    with _patch_now(FIXED_NOW):
-        result = _dhw_schedule_state_now(coord, dhw)
+    result = _dhw_schedule_state_now(coord, dhw, now=FIXED_NOW)
 
     assert result is not None
     assert result.state == "Off"
@@ -157,8 +161,7 @@ def test_before_first_switchpoint_today():
     Wednesday's last state ("Off" at 22:00) and points next to Thursday 07:00."""
     now = datetime(2026, 5, 7, 6, 30, 0, tzinfo=timezone.utc)
     coord, dhw = _make_coord(FULL_SCHEDULE)
-    with _patch_now(now):
-        result = _dhw_schedule_state_now(coord, dhw)
+    result = _dhw_schedule_state_now(coord, dhw, now=now)
 
     assert result is not None
     assert result.state == "Off"                                   # Wednesday last
@@ -175,8 +178,7 @@ def test_after_last_switchpoint_today():
     Friday's first switchpoint at 07:00."""
     now = datetime(2026, 5, 7, 23, 0, 0, tzinfo=timezone.utc)
     coord, dhw = _make_coord(FULL_SCHEDULE)
-    with _patch_now(now):
-        result = _dhw_schedule_state_now(coord, dhw)
+    result = _dhw_schedule_state_now(coord, dhw, now=now)
 
     assert result is not None
     assert result.state == "Off"
@@ -190,15 +192,13 @@ def test_after_last_switchpoint_today():
 
 def test_empty_schedule_returns_none():
     coord, dhw = _make_coord({"dailySchedules": []})
-    with _patch_now(FIXED_NOW):
-        result = _dhw_schedule_state_now(coord, dhw)
+    result = _dhw_schedule_state_now(coord, dhw, now=FIXED_NOW)
     assert result is None
 
 
 def test_none_schedule_returns_none():
     coord, dhw = _make_coord(None)
-    with _patch_now(FIXED_NOW):
-        result = _dhw_schedule_state_now(coord, dhw)
+    result = _dhw_schedule_state_now(coord, dhw, now=FIXED_NOW)
     assert result is None
 
 
@@ -218,8 +218,7 @@ def test_single_day_one_switchpoint_wraps_to_next_week():
         ]
     }
     coord, dhw = _make_coord(schedule)
-    with _patch_now(FIXED_NOW):
-        result = _dhw_schedule_state_now(coord, dhw)
+    result = _dhw_schedule_state_now(coord, dhw, now=FIXED_NOW)
 
     assert result is not None
     assert result.state == "On"
@@ -247,8 +246,7 @@ def test_timezone_aware_next_change_bst():
         ]
     }
     coord, dhw = _make_coord(schedule, time_zone="Europe/London")
-    with _patch_now(now_london):
-        result = _dhw_schedule_state_now(coord, dhw)
+    result = _dhw_schedule_state_now(coord, dhw, now=now_london)
 
     assert result is not None
     assert result.state == "On"

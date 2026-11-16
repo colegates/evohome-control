@@ -113,6 +113,15 @@ _cv_mod = _mod(
     matches_regex=_cv_matches_regex,
 )
 
+class _Context:
+    """Stub replica of homeassistant.core.Context."""
+
+    def __init__(self, user_id=None, parent_id=None, id=None):
+        self.user_id = user_id
+        self.parent_id = parent_id
+        self.id = id
+
+
 _core_mod = _mod(
     "homeassistant.core",
     HomeAssistant=object,
@@ -120,6 +129,7 @@ _core_mod = _mod(
     ServiceResponse=dict,
     SupportsResponse=_SupportsResponse,
     callback=lambda f: f,
+    Context=_Context,
 )
 
 _exceptions_mod = _mod(
@@ -185,6 +195,7 @@ _climate_mod = _mod(
     "homeassistant.components.climate",
     ClimateEntity=object,
     HVACMode=MagicMock(),
+    HVACAction=MagicMock(),
     ClimateEntityFeature=MagicMock(),
 )
 _water_heater_mod = _mod(

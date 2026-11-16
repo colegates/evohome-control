@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from homeassistant.components.climate import (
@@ -19,6 +19,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+from . import audit, timing
 from .const import DOMAIN, MANUFACTURER
 from .coordinator import EvohomeDataUpdateCoordinator, ZoneData
 
@@ -28,6 +29,8 @@ _LOGGER = logging.getLogger(__name__)
 _MODE_FOLLOW = "FollowSchedule"
 _MODE_PERMANENT = "PermanentOverride"
 _MODE_TEMPORARY = "TemporaryOverride"
+
+_ONE_HOUR = timedelta(hours=1)
 
 
 async def async_setup_entry(
@@ -179,24 +182,76 @@ class EvohomeZoneClimate(CoordinatorEntity[EvohomeDataUpdateCoordinator], Climat
 
     # ---- commands -------------------------------------------------------
 
+    def _next_switchpoint_until(self, zone: ZoneData) -> datetime:
+        """Return the datetime to use for a TemporaryOverride.
+
+        Prefers the zone's next scheduled switchpoint (so a plain temperature
+        change behaves like one made on the Evohome controller itself: it
+        ends at the next schedule change). Falls back to one hour from now
+        when the schedule is unavailable or has no switchpoints.
+        """
+        loc = self.coordinator.data.locations.get(zone.location_id)
+        tz_id = loc.time_zone if loc is not None else None
+        nxt = timing.zone_next_switchpoint(zone.schedule, tz_id=tz_id)
+        if nxt is not None:
+            return nxt
+        return datetime.now(timezone.utc) + _ONE_HOUR
+
     async def async_set_temperature(self, **kwargs: Any) -> None:
+        """Change the heat setpoint.
+
+        A plain ``climate.set_temperature`` call (from the HA thermostat card,
+        voice assistants, Assist, MCP clients, automations) becomes a
+        TemporaryOverride that ends at the next scheduled switchpoint - the
+        same behaviour the Evohome controller applies to a local change.
+        Use the ``set_zone_temperature_until`` service or the
+        ``permanent_override`` preset to pin a value indefinitely.
+        """
         target = kwargs.get(ATTR_TEMPERATURE)
         if target is None:
             return
+        zone = self._zone
+        if not zone:
+            return
+        until_dt = self._next_switchpoint_until(zone)
+        until_str = timing.format_until(until_dt)
         await self.coordinator.client.async_set_zone_heat_setpoint(
             self._zone_id,
-            setpoint_mode=_MODE_PERMANENT,
+            setpoint_mode=_MODE_TEMPORARY,
             heat_setpoint_value=float(target),
+            time_until=until_str,
+        )
+        await audit.log_write(
+            _LOGGER,
+            self.hass,
+            self._context,
+            action="climate.set_temperature",
+            zone_name=zone.name,
+            zone_id=zone.zone_id,
+            location_id=zone.location_id,
+            setpoint_mode=_MODE_TEMPORARY,
+            temperature=float(target),
+            until=until_dt,
         )
         await self.coordinator.async_request_refresh()
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
+        zone = self._zone
         if hvac_mode == HVACMode.AUTO:
             await self.coordinator.client.async_set_zone_heat_setpoint(
                 self._zone_id, setpoint_mode=_MODE_FOLLOW
             )
+            await audit.log_write(
+                _LOGGER,
+                self.hass,
+                self._context,
+                action="climate.set_hvac_mode(auto)",
+                zone_name=zone.name if zone else None,
+                zone_id=self._zone_id,
+                location_id=zone.location_id if zone else None,
+                setpoint_mode=_MODE_FOLLOW,
+            )
         elif hvac_mode == HVACMode.OFF:
-            zone = self._zone
             if not zone:
                 return
             await self.coordinator.client.async_set_zone_heat_setpoint(
@@ -204,8 +259,18 @@ class EvohomeZoneClimate(CoordinatorEntity[EvohomeDataUpdateCoordinator], Climat
                 setpoint_mode=_MODE_PERMANENT,
                 heat_setpoint_value=zone.min_setpoint,
             )
+            await audit.log_write(
+                _LOGGER,
+                self.hass,
+                self._context,
+                action="climate.set_hvac_mode(off)",
+                zone_name=zone.name,
+                zone_id=zone.zone_id,
+                location_id=zone.location_id,
+                setpoint_mode=_MODE_PERMANENT,
+                temperature=zone.min_setpoint,
+            )
         elif hvac_mode == HVACMode.HEAT:
-            zone = self._zone
             if not zone:
                 return
             target = zone.target_setpoint or 21.0
@@ -213,6 +278,17 @@ class EvohomeZoneClimate(CoordinatorEntity[EvohomeDataUpdateCoordinator], Climat
                 self._zone_id,
                 setpoint_mode=_MODE_PERMANENT,
                 heat_setpoint_value=target,
+            )
+            await audit.log_write(
+                _LOGGER,
+                self.hass,
+                self._context,
+                action="climate.set_hvac_mode(heat)",
+                zone_name=zone.name,
+                zone_id=zone.zone_id,
+                location_id=zone.location_id,
+                setpoint_mode=_MODE_PERMANENT,
+                temperature=target,
             )
         await self.coordinator.async_request_refresh()
 
@@ -224,26 +300,56 @@ class EvohomeZoneClimate(CoordinatorEntity[EvohomeDataUpdateCoordinator], Climat
             await self.coordinator.client.async_set_zone_heat_setpoint(
                 self._zone_id, setpoint_mode=_MODE_FOLLOW
             )
+            await audit.log_write(
+                _LOGGER,
+                self.hass,
+                self._context,
+                action="climate.set_preset(follow_schedule)",
+                zone_name=zone.name,
+                zone_id=zone.zone_id,
+                location_id=zone.location_id,
+                setpoint_mode=_MODE_FOLLOW,
+            )
         elif preset_mode == "permanent_override":
+            temp = zone.target_setpoint or 21.0
             await self.coordinator.client.async_set_zone_heat_setpoint(
                 self._zone_id,
                 setpoint_mode=_MODE_PERMANENT,
-                heat_setpoint_value=zone.target_setpoint or 21.0,
+                heat_setpoint_value=temp,
+            )
+            await audit.log_write(
+                _LOGGER,
+                self.hass,
+                self._context,
+                action="climate.set_preset(permanent_override)",
+                zone_name=zone.name,
+                zone_id=zone.zone_id,
+                location_id=zone.location_id,
+                setpoint_mode=_MODE_PERMANENT,
+                temperature=temp,
             )
         elif preset_mode == "temporary_override":
             # Default to one hour from now if the caller doesn't supply
             # a custom time_until via the override service.
             now = datetime.now(timezone.utc).replace(microsecond=0)
             until = now.replace(minute=0, second=0) + _ONE_HOUR
+            temp = zone.target_setpoint or 21.0
             await self.coordinator.client.async_set_zone_heat_setpoint(
                 self._zone_id,
                 setpoint_mode=_MODE_TEMPORARY,
-                heat_setpoint_value=zone.target_setpoint or 21.0,
-                time_until=until.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                heat_setpoint_value=temp,
+                time_until=timing.format_until(until),
+            )
+            await audit.log_write(
+                _LOGGER,
+                self.hass,
+                self._context,
+                action="climate.set_preset(temporary_override)",
+                zone_name=zone.name,
+                zone_id=zone.zone_id,
+                location_id=zone.location_id,
+                setpoint_mode=_MODE_TEMPORARY,
+                temperature=temp,
+                until=until,
             )
         await self.coordinator.async_request_refresh()
-
-
-from datetime import timedelta as _td  # local import to keep top tidy
-
-_ONE_HOUR = _td(hours=1)

@@ -12,6 +12,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+from . import audit
 from .const import DOMAIN, MANUFACTURER
 from .coordinator import EvohomeDataUpdateCoordinator, LocationData
 
@@ -107,5 +108,15 @@ class SystemModeSelect(
             return
         await self.coordinator.client.async_set_system_mode(
             loc.primary_tcs_id, system_mode=option, permanent=True
+        )
+        await audit.log_write(
+            _LOGGER,
+            self.hass,
+            self._context,
+            action="select.system_mode",
+            location_id=loc.location_id,
+            location_name=loc.name,
+            tcs_id=loc.primary_tcs_id,
+            system_mode=option,
         )
         await self.coordinator.async_request_refresh()

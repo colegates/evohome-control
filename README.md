@@ -110,6 +110,33 @@ sanity-check that polling is healthy.
 | `evohome_control.away_until` | Sugar: set every (or one) location to Away mode until a specific time. |
 | `evohome_control.refresh_schedules` | Force-poll every location. |
 
+### Plain `climate.set_temperature` behaviour
+
+A plain temperature change from HA — the dashboard thermostat card, voice
+assistants, Assist, MCP clients, automations, scripts — is applied as a
+**TemporaryOverride that ends at the zone's next scheduled switchpoint**,
+matching the behaviour of a local setpoint change on the Evohome controller
+itself. If the schedule is missing we fall back to a one-hour temporary
+override. To pin a value indefinitely, use one of the explicit paths:
+`evohome_control.set_zone_temperature_until` with no duration/until, the
+`permanent_override` preset, or `hvac_mode: heat`/`off`.
+
+### Audit logging
+
+Every setpoint or mode write (from any entity or service) emits one `INFO`
+line to the `custom_components.evohome_control` logger that records the
+zone/DHW id, mode, temperature, until, and the caller — the HA user's name
+for UI actions, `automation/script` for chained calls, and `unknown`
+otherwise. Tokens and credentials are never logged. To surface these in the
+logbook, enable the `custom_components.evohome_control` logger at `info`
+in your `configuration.yaml`:
+
+```yaml
+logger:
+  logs:
+    custom_components.evohome_control: info
+```
+
 ## Bulk schedule editing
 
 To roll out a new weekday pattern to several zones in one call:
