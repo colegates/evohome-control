@@ -58,6 +58,22 @@ If you also have the official ``evohome`` integration loaded against the
 **same Resideo account**, both clients will compete for fresh logins.
 Disabling one is recommended.
 
+## Time zones
+
+The Resideo API returns each location's `timeZoneId` as a Windows-style name
+like `GMTStandardTime` or `W. Europe Standard Time` rather than an IANA zone.
+The integration maps these to IANA automatically so BST / summer-time
+switchpoints land at the correct UTC instant; resolution happens once per
+location during each poll's installation load, off the event loop. Known
+Windows ids: `GMTStandardTime` / `GMT Standard Time` →  `Europe/London`,
+`W. Europe Standard Time` → `Europe/Berlin`, `Romance Standard Time` →
+`Europe/Paris`, `Central Europe[an] Standard Time` →  `Europe/Budapest` /
+`Europe/Warsaw`, `FLE Standard Time` → `Europe/Kiev`, plus
+`Scandinavian Standard Time` → `Europe/Stockholm`. An unknown id falls back
+to HA's own default time zone (`homeassistant` config's `time_zone`) and
+logs one `WARNING` per offending id. If you see such a warning, open an
+issue with the id so the mapping can be expanded.
+
 ## Sync model
 
 The integration polls the API every `scan_interval` seconds (default 180,

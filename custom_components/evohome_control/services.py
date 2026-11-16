@@ -840,13 +840,17 @@ def _dhw_schedule_state_now(
 ) -> _DhwScheduledState | None:
     """Return the current scheduled DHW state and when it next changes.
 
-    Thin wrapper over :func:`timing.dhw_schedule_state_now` that resolves the
-    location's timezone from the coordinator and preserves the DHW-specific
-    return tuple. ``now`` is injectable for tests.
+    Thin wrapper over :func:`timing.dhw_schedule_state_now` that forwards the
+    coordinator's pre-resolved location ``tz`` (set during installation load
+    via ``async_resolve_tz``) and preserves the DHW-specific return tuple.
+    ``now`` is injectable for tests.
     """
     loc = coord.data.locations.get(dhw.location_id)
-    tz_id = loc.time_zone if loc is not None else None
-    state = timing.dhw_schedule_state_now(dhw.schedule, tz_id=tz_id, now=now)
+    tz = loc.tz if loc is not None else None
+    tz_id = loc.time_zone if (loc is not None and tz is None) else None
+    state = timing.dhw_schedule_state_now(
+        dhw.schedule, tz=tz, tz_id=tz_id, now=now
+    )
     if state is None:
         return None
     return _DhwScheduledState(state=state.value, next_change=state.next_change)
@@ -860,8 +864,11 @@ def _zone_schedule_next_change(
 ) -> datetime | None:
     """Return the datetime of the zone's next scheduled switchpoint, or None."""
     loc = coord.data.locations.get(zone.location_id)
-    tz_id = loc.time_zone if loc is not None else None
-    return timing.zone_next_switchpoint(zone.schedule, tz_id=tz_id, now=now)
+    tz = loc.tz if loc is not None else None
+    tz_id = loc.time_zone if (loc is not None and tz is None) else None
+    return timing.zone_next_switchpoint(
+        zone.schedule, tz=tz, tz_id=tz_id, now=now
+    )
 
 
 def _make_dhw_boost(hass: HomeAssistant):

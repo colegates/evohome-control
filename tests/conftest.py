@@ -230,6 +230,25 @@ _helpers_mod = _mod(
     config_validation=_cv_mod,
 )
 
+
+# homeassistant.util.dt stub – just enough for the coordinator's
+# dt_util.get_default_time_zone() call at install time. Tests that want a
+# specific default zone can monkey-patch this attribute.
+class _DtUtilModule(types.ModuleType):
+    DEFAULT_TIME_ZONE: Any = None  # set below
+
+    @staticmethod
+    def get_default_time_zone():
+        return _DtUtilModule.DEFAULT_TIME_ZONE
+
+
+from zoneinfo import ZoneInfo as _ZoneInfo
+
+_dt_util_mod = _DtUtilModule("homeassistant.util.dt")
+_dt_util_mod.DEFAULT_TIME_ZONE = _ZoneInfo("Europe/London")
+
+_util_mod = _mod("homeassistant.util", dt=_dt_util_mod)
+
 # aiohttp stub (only the surface used by api.py at module level)
 _aiohttp_mod = types.ModuleType("aiohttp")
 _aiohttp_mod.ClientSession = MagicMock  # type: ignore[attr-defined]
@@ -259,6 +278,8 @@ _STUB_MODULES: dict[str, types.ModuleType] = {
     "homeassistant.helpers.device_registry": _device_registry_mod,
     "homeassistant.helpers.entity_platform": _entity_platform_mod,
     "homeassistant.components": types.ModuleType("homeassistant.components"),
+    "homeassistant.util": _util_mod,
+    "homeassistant.util.dt": _dt_util_mod,
     "homeassistant.components.climate": _climate_mod,
     "homeassistant.components.water_heater": _water_heater_mod,
     "homeassistant.components.binary_sensor": _binary_sensor_mod,
